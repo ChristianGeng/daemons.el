@@ -445,30 +445,30 @@ The default viewer shows it in a buffer of its own for each daemon and
 host, which scrolls while point is at the end; killing the buffer stops
 the journal process.  Set `daemons-journal-function' to use another
 viewer.  Return the buffer of the default viewer."
-  (interactive (progn (daemons--journal-command)
+  (interactive (progn (unless daemons-journal-function (daemons--journal-command))
                       (list (daemons--completing-read))))
-  (let ((journal (daemons--journal-command)))
-    (cond
-     ((not daemons-journal-function)
-      (let ((buffer (get-buffer-create (daemons--get-journal-buffer-name name))))
-        (with-current-buffer buffer
-          (unless (process-live-p (get-buffer-process buffer))
-            (unless (derived-mode-p 'daemons-journal-mode) (daemons-journal-mode))
-            (let ((inhibit-read-only t)) (erase-buffer))
-            (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
-              (let ((dir default-directory))
-                (daemons--sudo)
-                (unless (equal dir default-directory)
-                  (setq daemons--journal-sudo-directory default-directory))))
-            (funcall journal name)))
-        (pop-to-buffer buffer)
-        buffer))
-     (daemons-always-sudo
-      ;; The /sudo:: directory is kept: the viewer's buffers may go on using it.
-      (with-temp-buffer
-        (daemons--sudo)
-        (funcall daemons-journal-function name)))
-     (t (funcall daemons-journal-function name)))))
+  (cond
+   ((not daemons-journal-function)
+    (let ((journal (daemons--journal-command))
+          (buffer (get-buffer-create (daemons--get-journal-buffer-name name))))
+      (with-current-buffer buffer
+        (unless (process-live-p (get-buffer-process buffer))
+          (unless (derived-mode-p 'daemons-journal-mode) (daemons-journal-mode))
+          (let ((inhibit-read-only t)) (erase-buffer))
+          (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
+            (let ((dir default-directory))
+              (daemons--sudo)
+              (unless (equal dir default-directory)
+                (setq daemons--journal-sudo-directory default-directory))))
+          (funcall journal name)))
+      (pop-to-buffer buffer)
+      buffer))
+   (daemons-always-sudo
+    ;; The /sudo:: directory is kept: the viewer's buffers may go on using it.
+    (with-temp-buffer
+      (daemons--sudo)
+      (funcall daemons-journal-function name)))
+   (t (funcall daemons-journal-function name))))
 
 ;;;###autoload
 (defun daemons-start (name)

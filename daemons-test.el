@@ -393,6 +393,16 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
           (should (equal (list (if sudo "/sudo::/tmp/" "/tmp/")) dirs))
           (should (equal "/tmp/" default-directory)))))))
 
+(ert-deftest daemons-journal-function-without-journal-command-test ()
+  "`daemons-journal-function' is called on an init system with no journal command."
+  (daemons-test--with-submodule 'daemons-no-status-line-test
+    (let* ((names nil)
+           (daemons-journal-function (lambda (name) (push name names))))
+      (daemons-journal "foo")
+      (cl-letf (((symbol-function 'completing-read) (lambda (&rest _) "bar")))
+        (call-interactively #'daemons-journal))
+      (should (equal '("bar" "foo") names)))))
+
 (ert-deftest daemons-journal-unsupported-test ()
   "An init system without a journal says so."
   (daemons-test--with-submodule 'daemons-no-status-line-test
