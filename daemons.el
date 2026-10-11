@@ -349,7 +349,10 @@ Signal a `user-error' if the submodule has none."
   "Show a one-line status of the daemon NAME in the echo area and return it."
   (interactive (progn (daemons--status-line-function)
                       (list (daemons--completing-read))))
-  (let ((line (funcall (daemons--status-line-function) name)))
+  (let* ((status-line (daemons--status-line-function))
+         (line (with-temp-buffer
+                 (when daemons-always-sudo (daemons--sudo))
+                 (funcall status-line name))))
     (message "%s" line)
     line))
 

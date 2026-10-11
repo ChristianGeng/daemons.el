@@ -148,6 +148,24 @@ The messages are bound to `messages' in BODY."
       (should (equal "bar: up" (call-interactively #'daemons-status-line-at-point)))
       (should (equal '("bar: up") messages)))))
 
+(daemons-define-submodule daemons-status-line-dir-test
+  "Test: submodule whose status line shows where it ran"
+  :test t
+  :commands '((status-line . (lambda (name) (concat name ": " default-directory))))
+  :headers [("Daemon name" 100 t)]
+  :list nil)
+
+(ert-deftest daemons-status-line-always-sudo-test ()
+  "The status line runs as root with `daemons-always-sudo', like other commands."
+  (dolist (case '((t . "foo: /sudo::/tmp/x/") (nil . "foo: /tmp/")))
+    (daemons-test--with-submodule 'daemons-status-line-dir-test
+      (let ((daemons-always-sudo (car case))
+            (default-directory "/tmp/"))
+        (cl-letf (((symbol-function 'daemons--sudo)
+                   (lambda () (setq default-directory "/sudo::/tmp/x/"))))
+          (should (equal (cdr case) (daemons-status-line "foo")))
+          (should (equal "/tmp/" default-directory)))))))
+
 (ert-deftest daemons-status-line-unsupported-test ()
   "An init system without a status line says so."
   (daemons-test--with-submodule 'daemons-no-status-line-test
