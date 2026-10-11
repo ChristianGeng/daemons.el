@@ -83,6 +83,18 @@ Return the fontified buffer text and the command that was run."
       (should (equal "systemctl --user status foo"
                      (daemons-systemd--status-cmd "foo"))))))
 
+(ert-deftest systemd-status-cmd-colours-reach-systemctl-test ()
+  "The colour variables go right before systemctl, inside any sudo wrapper."
+  (let ((daemons-systemd-color t))
+    (dolist (case '(("sudo systemctl status foo"
+                     . "sudo env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
+                    ("sudo -u bob /usr/bin/systemctl --user status foo"
+                     . "sudo -u bob env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 /usr/bin/systemctl --user status foo")
+                    ("my-status-wrapper foo"
+                     . "env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 my-status-wrapper foo")))
+      (let ((daemons-systemctl-command-fn (lambda (_command _service) (car case))))
+        (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))))))
+
 (ert-deftest systemd-status-colours-failed-unit-test ()
   (pcase-let ((`(,text ,command)
                (daemons-systemd-test--status-buffer daemons-systemd-test--failed-status t)))
