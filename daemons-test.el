@@ -25,7 +25,8 @@
                         :test (lambda () t)
                         :commands nil
                         :list (lambda () nil)
-                        :headers (lambda () []))))
+                        :headers (lambda () [])
+                        :eldoc-documentation-function nil)))
     (daemons-define-submodule daemons-happy
       "Test: happy path submodule"
       :test t
