@@ -90,8 +90,12 @@ Return the fontified buffer text and the command that was run."
                      . "sudo env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
                     ("sudo -u bob /usr/bin/systemctl --user status foo"
                      . "sudo -u bob env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 /usr/bin/systemctl --user status foo")
+                    ("cd /tmp && systemctl status foo"
+                     . "cd /tmp && env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
                     ("my-status-wrapper foo"
-                     . "env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 my-status-wrapper foo")))
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; my-status-wrapper foo")
+                    ("cd /tmp && my-status-wrapper foo"
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; cd /tmp && my-status-wrapper foo")))
       (let ((daemons-systemctl-command-fn (lambda (_command _service) (car case))))
         (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))))))
 
