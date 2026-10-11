@@ -255,7 +255,10 @@ The cdr of each pair is a function taking a daemon name and returning a shell
 command to execute.
 
 e.g. \\='((start . (lambda (x) (format \"service %s start\" x)))
-       (stop . (lambda (x) (format \"service %s stop\" x))))"
+       (stop . (lambda (x) (format \"service %s stop\" x))))
+
+The optional \\='status-line entry differs: its function takes a daemon
+name and returns the one-line status itself (see `daemons-status-line')."
   (let  ((submodule (daemons--get-submodule submodule-name)))
     (plist-get submodule :commands)))
 
@@ -287,6 +290,11 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show the status of the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
   (daemons--run-with-output-buffer 'status name))
+
+(defun daemons-status-line-at-point (name)
+  "Show a one-line status of the daemon NAME at point and return it."
+  (interactive (list (daemons--daemon-at-point)))
+  (daemons-status-line name))
 
 (defun daemons-start-at-point (name)
   "Start the daemon NAME at point in the daemons buffer."
@@ -328,6 +336,29 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show the status of the daemon NAME."
   (interactive (list (daemons--completing-read)))
   (daemons--run-with-output-buffer 'status name))
+
+(defun daemons--status-line-function ()
+  "Return the submodule's \\='status-line function.
+Signal a `user-error' if the submodule has none."
+  (let ((submodule (daemons-init-system-submodule)))
+    (or (daemons--command 'status-line submodule)
+        (user-error "%s does not support a one-line status" submodule))))
+
+;;;###autoload
+(defun daemons-status-line (name)
+  "Show a one-line status of the daemon NAME in the echo area and return it."
+  (interactive (progn (daemons--status-line-function)
+                      (list (daemons--completing-read))))
+  (let* ((status-line (daemons--status-line-function))
+         (line (with-temp-buffer
+                 (let ((dir default-directory))
+                   (when daemons-always-sudo (daemons--sudo))
+                   (unwind-protect (funcall status-line name)
+                     ;; Remove the directory `daemons--sudo' made for this call.
+                     (unless (equal dir default-directory)
+                       (delete-directory (file-local-name default-directory))))))))
+    (message "%s" line)
+    line))
 
 ;;;###autoload
 (defun daemons-start (name)
