@@ -262,6 +262,18 @@ The directory `daemons--sudo' makes is removed afterwards, also on error."
                      (let ((default-directory "/ssh:me@example.com:/etc/"))
                        (daemons--get-journal-buffer-name "foo")))))))
 
+(ert-deftest daemons-journal-buffer-per-sudo-test ()
+  "With `daemons-always-sudo' a local journal has a buffer of its own, as root."
+  (daemons-test--with-journal
+    (let* ((default-directory "/tmp/")
+           (user (let ((daemons-always-sudo nil)) (daemons--get-journal-buffer-name "foo")))
+           (root (let ((daemons-always-sudo t)) (daemons--get-journal-buffer-name "foo"))))
+      (should-not (equal user root))
+      (should (equal (format "*daemons-journal foo for root@%s*" (system-name)) root))
+      (let ((default-directory "/ssh:me@example.com:/"))
+        (should (equal (let ((daemons-always-sudo nil)) (daemons--get-journal-buffer-name "foo"))
+                       (let ((daemons-always-sudo t)) (daemons--get-journal-buffer-name "foo"))))))))
+
 (ert-deftest daemons-journal-reuses-running-process-test ()
   "Asking again for a journal that is being followed shows the same buffer."
   (daemons-test--with-journal

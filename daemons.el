@@ -167,12 +167,13 @@ Override this to your own value for mocking out shell calls in tests.")
 It names what the journal follows, as the submodule's optional
 \\='journal-target command gives it for NAME, and where: the full TRAMP
 prefix (method, user, host and port) of a remote `default-directory', or
-the local user and host."
+the local user and host, which is root with `daemons-always-sudo'."
   (let ((target (daemons--command 'journal-target (daemons-init-system-submodule))))
     (format "*daemons-journal %s for %s*"
             (if target (funcall target name) name)
             (or (file-remote-p default-directory)
-                (daemons--get-user-and-hostname default-directory)))))
+                (daemons--get-user-and-hostname
+                 (if daemons-always-sudo "/sudo::" default-directory))))))
 
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
