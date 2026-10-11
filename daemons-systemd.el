@@ -147,15 +147,23 @@ service.  Both should be strings.
 \"--user\" will be appended to the systemctl call if `daemons-systemd-is-user' is set."
   (format "%s %s %s" (daemons-systemd--cmd) command service))
 
+(defconst daemons-systemd--colour-env "env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0"
+  "Command prefix that makes systemctl colour its output.")
+
 (defun daemons-systemd--status-cmd (service)
   "Return the shell command that shows the status of SERVICE.
 With `daemons-systemd-color', systemctl is asked for colours so that
 `daemons-systemd--mark-journal-errors' can find journal lines of priority
-err and above."
+err and above.  The variables are set right before the systemctl word, so
+they survive a wrapper such as sudo, which drops the caller's environment."
   (let ((cmd (funcall daemons-systemctl-command-fn "status" service)))
-    (if daemons-systemd-color
-        (concat "env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 " cmd)
-      cmd)))
+    (cond ((not daemons-systemd-color) cmd)
+          ((string-match "\\(?:^\\|[ \t]\\)\\([^ \t]*/\\)?systemctl\\_>" cmd)
+           (let ((start (or (match-beginning 1)
+                            (- (match-end 0) (length "systemctl")))))
+             (concat (substring cmd 0 start) daemons-systemd--colour-env " "
+                     (substring cmd start))))
+          (t (concat daemons-systemd--colour-env " " cmd)))))
 
 (defconst daemons-systemd--status-font-lock-keywords
   '(("^ *\\(Loaded\\|Active\\):" 1 'daemons-systemd-label)
