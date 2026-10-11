@@ -208,3 +208,12 @@ NAME defaults to \"rygel\", COLOR sets `daemons-systemd-color'."
 (ert-deftest systemd-status-line-bad-output-test ()
   (should-error (daemons-systemd-test--status-line
                  "Failed to connect to bus: No such file or directory\n" t)))
+
+(ert-deftest systemd-status-line-quotes-unit-name-test ()
+  "Escaped unit names reach systemctl intact and nothing else is run."
+  (dolist (case '(("dev-disk-by\\x2duuid-1.device" . "dev-disk-by\\\\x2duuid-1.device")
+                  ("foo;touch x" . "foo\\;touch\\ x.service")))
+    (should (string-suffix-p
+             (concat " --value " (cdr case))
+             (cadr (daemons-systemd-test--status-line
+                    "loaded\nactive\nrunning\nstatic\nn/a\n" t (car case)))))))
