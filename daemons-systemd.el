@@ -210,6 +210,79 @@ Does nothing unless `daemons-systemd-color' is set."
 
 (add-hook 'daemons-output-mode-hook #'daemons-systemd--setup-output)
 
+(defconst daemons-systemd--status-line-properties
+  "LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestamp"
+  "Unit properties `daemons-systemd--status-line' asks systemctl for.
+`systemctl show --value' prints their values in this order, the order of
+systemd's D-Bus interface, whatever the order given to -p.")
+
+(defconst daemons-systemd--unit-type-regexp
+  (concat "\\.\\(?:service\\|socket\\|device\\|mount\\|automount\\|swap"
+          "\\|target\\|path\\|timer\\|slice\\|scope\\)\\'")
+  "Regexp for the unit type suffix of a systemd unit name.")
+
+(defun daemons-systemd--unit-name (name)
+  "Return NAME with \".service\" appended unless it has a unit type."
+  (if (string-match-p daemons-systemd--unit-type-regexp name)
+      name
+    (concat name ".service")))
+
+(defun daemons-systemd--status-line-face (active-state)
+  "Return the face for a unit in ACTIVE-STATE, or nil."
+  (pcase active-state
+    ("active" 'daemons-systemd-enabled)
+    ((or "failed" "inactive") 'daemons-systemd-bad)
+    ((or "activating" "deactivating" "reloading") 'daemons-systemd-changing)))
+
+(defun daemons-systemd--status-line-colour (face string)
+  "Return STRING in FACE if `daemons-systemd-color' is set."
+  (if (and daemons-systemd-color face)
+      (propertize string 'face face)
+    string))
+
+(defun daemons-systemd--status-line-time (timestamp)
+  "Return the time of day in TIMESTAMP, with the date unless it is today.
+Return nil if TIMESTAMP has no date, as with \"n/a\"."
+  (when (string-match (concat "\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\) "
+                              "\\([0-9]\\{1,2\\}:[0-9]\\{2\\}\\)")
+                      timestamp)
+    (let ((date (match-string 1 timestamp))
+          (time (match-string 2 timestamp)))
+      (if (string= date (format-time-string "%F"))
+          time
+        (concat date " " time)))))
+
+(defun daemons-systemd--status-line (name)
+  "Return a one-line status of the systemd unit NAME.
+For example \"rygel.service: active (running) since 09:14 \u2014 enabled\".
+The fields come from one `systemctl show' call, so they agree with each
+other.  The state is coloured if `daemons-systemd-color' is set."
+  (let* ((unit (daemons-systemd--unit-name name))
+         (output (daemons--shell-command-to-string
+                  (funcall daemons-systemctl-command-fn
+                           (format "show -p %s --value"
+                                   daemons-systemd--status-line-properties)
+                           unit)))
+         (lines (split-string output "\n")))
+    (when (equal (car (last lines)) "")
+      (setq lines (butlast lines)))
+    ;; Warnings on stderr, such as for an escaped unit name, come first.
+    (when (< (length lines) 5)
+      (error "Unexpected output from systemctl show %s: %s" unit output))
+    (pcase-let ((`(,load ,active ,sub ,file ,since) (last lines 5)))
+      (concat
+       unit ": "
+       (if (and (string= load "not-found") (string= active "inactive"))
+           (daemons-systemd--status-line-colour 'daemons-systemd-bad "no such unit")
+         (let ((time (and (string= active "active")
+                          (daemons-systemd--status-line-time since))))
+           (concat
+            (daemons-systemd--status-line-colour
+             (daemons-systemd--status-line-face active)
+             (format "%s (%s)" active sub))
+            (when time (concat " since " time))
+            (unless (string= file "") (concat " \u2014 " file)))))))))
+
 (daemons-define-submodule daemons-systemd
   "Daemons submodule for systemd."
 
@@ -222,7 +295,8 @@ Does nothing unless `daemons-systemd-color' is set."
     (restart . (lambda (name) (funcall daemons-systemctl-command-fn "restart" name)))
     (reload . (lambda (name) (funcall daemons-systemctl-command-fn "reload" name)))
     (enable . (lambda (name) (funcall daemons-systemctl-command-fn "enable" name)))
-    (disable . (lambda (name) (funcall daemons-systemctl-command-fn "disable" name))))
+    (disable . (lambda (name) (funcall daemons-systemctl-command-fn "disable" name)))
+    (status-line . daemons-systemd--status-line))
 
   :list (daemons-systemd--list)
 

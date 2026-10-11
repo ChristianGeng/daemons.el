@@ -97,6 +97,65 @@
       :list expected)
     (should (equal expected (daemons--list 'daemons-list-test)))))
 
+;; status line tests
+(daemons-define-submodule daemons-status-line-test
+  "Test: submodule with a status line"
+  :test t
+  :commands '((status-line . (lambda (name) (format "%s: up" name))))
+  :headers [("Daemon name" 100 t)]
+  :list '(("foo" ["foo"]) ("bar" ["bar"])))
+
+(daemons-define-submodule daemons-no-status-line-test
+  "Test: submodule without a status line"
+  :test t
+  :commands '((status . (lambda (name) (format "status %s" name))))
+  :headers [("Daemon name" 100 t)]
+  :list nil)
+
+(defmacro daemons-test--with-submodule (submodule &rest body)
+  "Run BODY with SUBMODULE as the init system and messages collected.
+The messages are bound to `messages' in BODY."
+  (declare (indent 1))
+  `(let ((messages nil))
+     (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () ,submodule))
+               ((symbol-function 'message)
+                (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+       ,@body)))
+
+(ert-deftest daemons-status-line-test ()
+  "The status line is echoed and returned."
+  (daemons-test--with-submodule 'daemons-status-line-test
+    (should (equal "foo: up" (daemons-status-line "foo")))
+    (should (equal '("foo: up") messages))))
+
+(ert-deftest daemons-status-line-completes-daemon-names-test ()
+  (daemons-test--with-submodule 'daemons-status-line-test
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (should (equal '("foo" "bar") (mapcar #'car collection)))
+                 "bar")))
+      (should (equal "bar: up" (call-interactively #'daemons-status-line)))
+      (should (equal '("bar: up") messages)))))
+
+(ert-deftest daemons-status-line-at-point-test ()
+  (daemons-test--with-submodule 'daemons-status-line-test
+    (with-temp-buffer
+      (daemons-mode)
+      (setq tabulated-list-entries (daemons--list 'daemons-status-line-test))
+      (tabulated-list-print)
+      (goto-char (point-min))
+      (forward-line 1)
+      (should (equal "bar: up" (call-interactively #'daemons-status-line-at-point)))
+      (should (equal '("bar: up") messages)))))
+
+(ert-deftest daemons-status-line-unsupported-test ()
+  "An init system without a status line says so."
+  (daemons-test--with-submodule 'daemons-no-status-line-test
+    (let ((err (should-error (daemons-status-line "foo") :type 'user-error)))
+      (should (equal "daemons-no-status-line-test does not support a one-line status"
+                     (cadr err))))
+    (should-not messages)))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))

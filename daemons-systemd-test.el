@@ -131,3 +131,80 @@ Return the fontified buffer text and the command that was run."
     (should (equal "systemctl --user status dtest" command))
     (should-not (daemons-systemd-test--face text "active (running)"))
     (should-not (daemons-systemd-test--face text "Loaded:"))))
+
+(defun daemons-systemd-test--status-line (output &optional color name)
+  "Return the status line of NAME for systemctl OUTPUT, and the command run.
+NAME defaults to \"rygel\", COLOR sets `daemons-systemd-color'."
+  (let* ((daemons-systemd-color color)
+         (daemons-systemd-is-user t)
+         (daemons-systemctl-command-fn #'daemons-systemctl-cmd)
+         (command nil)
+         (daemons--shell-command-to-string-fun (lambda (cmd) (setq command cmd) output)))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd))
+              ((symbol-function 'message) #'ignore))
+      (list (daemons-status-line (or name "rygel")) command))))
+
+(defun daemons-systemd-test--today (time)
+  "Return an ActiveEnterTimestamp for TIME today."
+  (format-time-string (concat "%a %F " time " UTC")))
+
+(ert-deftest systemd-status-line-running-test ()
+  (pcase-let ((`(,line ,command)
+               (daemons-systemd-test--status-line
+                (concat "loaded\nactive\nrunning\nenabled\n"
+                        (daemons-systemd-test--today "09:14:07") "\n")
+                t)))
+    (should (equal (concat "systemctl --user show -p LoadState,ActiveState,SubState,"
+                           "UnitFileState,ActiveEnterTimestamp --value rygel.service")
+                   command))
+    (should (equal "rygel.service: active (running) since 09:14 \u2014 enabled" line))
+    (should (eq 'daemons-systemd-enabled (daemons-systemd-test--face line "active (running)")))
+    (should-not (daemons-systemd-test--face line "rygel.service"))
+    (should-not (daemons-systemd-test--face line "enabled"))))
+
+(ert-deftest systemd-status-line-started-before-today-test ()
+  (should (equal "cron.service: active (running) since 2020-02-03 07:05 \u2014 enabled"
+                 (car (daemons-systemd-test--status-line
+                       "loaded\nactive\nrunning\nenabled\nMon 2020-02-03 07:05:00 UTC\n"
+                       t "cron.service")))))
+
+(ert-deftest systemd-status-line-stopped-test ()
+  (let ((line (car (daemons-systemd-test--status-line
+                    "loaded\ninactive\ndead\ndisabled\nSun 2026-10-11 08:00:00 UTC\n" t))))
+    (should (equal "rygel.service: inactive (dead) \u2014 disabled" line))
+    (should (eq 'daemons-systemd-bad (daemons-systemd-test--face line "inactive (dead)")))))
+
+(ert-deftest systemd-status-line-unknown-unit-test ()
+  "An unknown unit reports \"no such unit\", also after a warning on stderr."
+  (dolist (output '("not-found\ninactive\ndead\n\nn/a\n"
+                    "Invalid unit name \"foo/bar\" escaped as \"foo-bar\".\nnot-found\ninactive\ndead\n\nn/a\n"))
+    (let ((line (car (daemons-systemd-test--status-line output t "nope"))))
+      (should (equal "nope.service: no such unit" line))
+      (should (eq 'daemons-systemd-bad (daemons-systemd-test--face line "no such unit"))))))
+
+(ert-deftest systemd-status-line-states-test ()
+  (dolist (case '(("failed" "failed" daemons-systemd-bad)
+                  ("activating" "start" daemons-systemd-changing)
+                  ("deactivating" "stop-sigterm" daemons-systemd-changing)
+                  ("reloading" "reload" daemons-systemd-changing)))
+    (pcase-let* ((`(,active ,sub ,face) case)
+                 (state (format "%s (%s)" active sub))
+                 (line (car (daemons-systemd-test--status-line
+                             (format "loaded\n%s\n%s\nstatic\nn/a\n" active sub) t))))
+      (should (equal (concat "rygel.service: " state " \u2014 static") line))
+      (should (eq face (daemons-systemd-test--face line state))))))
+
+(ert-deftest systemd-status-line-without-unit-file-state-test ()
+  (should (equal "run-u1.scope: active (running)"
+                 (car (daemons-systemd-test--status-line
+                       "loaded\nactive\nrunning\n\nn/a\n" t "run-u1.scope")))))
+
+(ert-deftest systemd-status-line-without-colour-test ()
+  (dolist (output '("loaded\nactive\nrunning\nenabled\nn/a\n"
+                    "not-found\ninactive\ndead\n\nn/a\n"))
+    (let ((line (car (daemons-systemd-test--status-line output nil))))
+      (should-not (text-property-not-all 0 (length line) 'face nil line)))))
+
+(ert-deftest systemd-status-line-bad-output-test ()
+  (should-error (daemons-systemd-test--status-line
+                 "Failed to connect to bus: No such file or directory\n" t)))

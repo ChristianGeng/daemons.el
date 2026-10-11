@@ -255,7 +255,10 @@ The cdr of each pair is a function taking a daemon name and returning a shell
 command to execute.
 
 e.g. \\='((start . (lambda (x) (format \"service %s start\" x)))
-       (stop . (lambda (x) (format \"service %s stop\" x))))"
+       (stop . (lambda (x) (format \"service %s stop\" x))))
+
+The optional \\='status-line entry differs: its function takes a daemon
+name and returns the one-line status itself (see `daemons-status-line')."
   (let  ((submodule (daemons--get-submodule submodule-name)))
     (plist-get submodule :commands)))
 
@@ -287,6 +290,11 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show the status of the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
   (daemons--run-with-output-buffer 'status name))
+
+(defun daemons-status-line-at-point (name)
+  "Show a one-line status of the daemon NAME at point and return it."
+  (interactive (list (daemons--daemon-at-point)))
+  (daemons-status-line name))
 
 (defun daemons-start-at-point (name)
   "Start the daemon NAME at point in the daemons buffer."
@@ -328,6 +336,23 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show the status of the daemon NAME."
   (interactive (list (daemons--completing-read)))
   (daemons--run-with-output-buffer 'status name))
+
+(defun daemons--status-line (name)
+  "Return the one-line status of the daemon NAME from the submodule.
+Signal a `user-error' if the submodule has no \\='status-line command."
+  (let* ((submodule (daemons-init-system-submodule))
+         (status-line-fun (daemons--command 'status-line submodule)))
+    (unless status-line-fun
+      (user-error "%s does not support a one-line status" submodule))
+    (funcall status-line-fun name)))
+
+;;;###autoload
+(defun daemons-status-line (name)
+  "Show a one-line status of the daemon NAME in the echo area and return it."
+  (interactive (list (daemons--completing-read)))
+  (let ((line (daemons--status-line name)))
+    (message "%s" line)
+    line))
 
 ;;;###autoload
 (defun daemons-start (name)
