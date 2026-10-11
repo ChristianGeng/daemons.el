@@ -226,7 +226,7 @@ Does nothing unless `daemons-systemd-color' is set."
 
   :list (daemons-systemd--list)
 
-  :headers [("Daemon (service)" 60 t) ("Enabled" 40 t)]
+  :headers [("Daemon (service)" 60 t) ("Enabled" 20 t) ("Active" 15 t)]
 
   :eldoc-documentation-function #'daemons--systemd-eldoc-function)
 
@@ -242,13 +242,60 @@ Does nothing unless `daemons-systemd-color' is set."
 ITEM should correspond to the output type of `daemons-systemd--parse-list-item'."
   (not (string-match-p "@$" (car item))))
 
+(defun daemons-systemd--active-state (active sub)
+  "Return the short state of a unit whose ACTIVE and SUB states are given.
+This is SUB, such as \"running\" or \"dead\", except while the unit
+changes state: then SUB is a step such as \"start-pre\", and ACTIVE,
+such as \"activating\", says more."
+  (if (member active '("activating" "deactivating" "reloading"))
+      active
+    sub))
+
+(defun daemons-systemd--active-color (state)
+  "Return STATE, colorized if `daemons-systemd-color' is set.
+A dead unit is dimmed, not marked bad: for a timer-driven oneshot unit
+that is the normal state between runs."
+  (let ((face (pcase state
+                ((or "running" "exited") 'daemons-systemd-enabled)
+                ("failed" 'daemons-systemd-bad)
+                ((or "activating" "deactivating" "reloading") 'daemons-systemd-changing)
+                ((or "dead" "inactive") 'daemons-systemd-disabled))))
+    (if (and daemons-systemd-color face)
+        (propertize state 'font-lock-face face)
+      state)))
+
+(defun daemons-systemd--active-states ()
+  "Return a hash table of the short active state of each loaded service.
+The keys are unit names such as \"foo.service\"."
+  (let ((states (make-hash-table :test 'equal)))
+    (dolist (line (daemons--split-lines
+                   (daemons--shell-command-to-string
+                    (format "%s list-units --type=service --all --no-legend"
+                            (daemons-systemd--cmd)))))
+      (let ((parts (split-string line)))
+        ;; Failed and not-found units are marked with a bullet.
+        (when (member (car parts) '("\u25cf" "*"))
+          (setq parts (cdr parts)))
+        (pcase-let ((`(,unit ,_load ,active ,sub . ,_) parts))
+          (when sub
+            (puthash unit (daemons-systemd--active-state active sub) states)))))
+    states))
+
 (defun daemons-systemd--list ()
-  "Return a list of daemons on a systemd system."
-  (thread-last  (format "%s list-unit-files --type=service --no-legend" (daemons-systemd--cmd))
-    (daemons--shell-command-to-string)
-    (daemons--split-lines)
-    (seq-map 'daemons-systemd--parse-list-item)
-    (seq-filter 'daemons-systemd--item-is-simple-service-p)))
+  "Return a list of daemons on a systemd system.
+Each item is (NAME [NAME ENABLED ACTIVE]).  Units that `systemctl
+list-units' does not report have never been loaded; they are inactive."
+  (let ((states (daemons-systemd--active-states)))
+    (thread-last  (format "%s list-unit-files --type=service --no-legend" (daemons-systemd--cmd))
+      (daemons--shell-command-to-string)
+      (daemons--split-lines)
+      (seq-map (lambda (line)
+                 (let ((item (daemons-systemd--parse-list-item line))
+                       (state (gethash (car (split-string line)) states "inactive")))
+                   (list (car item)
+                         (vconcat (cadr item)
+                                  (vector (daemons-systemd--active-color state)))))))
+      (seq-filter 'daemons-systemd--item-is-simple-service-p))))
 
 (defun daemons-systemd-toggle-user ()
   "Toggle showing of user services"
