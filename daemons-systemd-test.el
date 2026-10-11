@@ -217,3 +217,12 @@ NAME defaults to \"rygel\", COLOR sets `daemons-systemd-color'."
              (concat " --value " (cdr case))
              (cadr (daemons-systemd-test--status-line
                     "loaded\nactive\nrunning\nstatic\nn/a\n" t (car case)))))))
+
+(ert-deftest systemd-status-line-remote-shows-date-test ()
+  "A remote host's date may differ from ours, so its start date is shown."
+  (let ((timestamp (daemons-systemd-test--today "09:14:07")))
+    (should (equal "09:14" (let ((default-directory "/tmp/"))
+                             (daemons-systemd--status-line-time timestamp))))
+    (should (equal (concat (format-time-string "%F") " 09:14")
+                   (let ((default-directory "/ssh:box:/tmp/"))
+                     (daemons-systemd--status-line-time timestamp))))))

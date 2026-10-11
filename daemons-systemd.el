@@ -242,13 +242,15 @@ systemd's D-Bus interface, whatever the order given to -p.")
 
 (defun daemons-systemd--status-line-time (timestamp)
   "Return the time of day in TIMESTAMP, with the date unless it is today.
+On a remote host, whose date may differ from ours, the date is always shown.
 Return nil if TIMESTAMP has no date, as with \"n/a\"."
   (when (string-match (concat "\\([0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\) "
                               "\\([0-9]\\{1,2\\}:[0-9]\\{2\\}\\)")
                       timestamp)
     (let ((date (match-string 1 timestamp))
           (time (match-string 2 timestamp)))
-      (if (string= date (format-time-string "%F"))
+      (if (and (not (file-remote-p default-directory))
+               (string= date (format-time-string "%F")))
           time
         (concat date " " time)))))
 
