@@ -266,8 +266,11 @@ that is the normal state between runs."
 
 (defun daemons-systemd--active-states ()
   "Return a hash table of the short active state of each loaded service.
-The keys are unit names such as \"foo.service\"."
-  (let ((states (make-hash-table :test 'equal)))
+The keys are unit names such as \"foo.service\".  Return nil if
+`systemctl list-units' printed only lines that are not units, such as
+\"Failed to connect to bus\": then the states are unknown."
+  (let ((states (make-hash-table :test 'equal))
+        (other-output nil))
     (dolist (line (daemons--split-lines
                    (daemons--shell-command-to-string
                     (format "%s list-units --type=service --all --no-legend"
@@ -277,21 +280,26 @@ The keys are unit names such as \"foo.service\"."
         (when (member (car parts) '("\u25cf" "*"))
           (setq parts (cdr parts)))
         (pcase-let ((`(,unit ,_load ,active ,sub . ,_) parts))
-          (when sub
-            (puthash unit (daemons-systemd--active-state active sub) states)))))
-    states))
+          (if (and sub (string-suffix-p ".service" unit))
+              (puthash unit (daemons-systemd--active-state active sub) states)
+            (when parts (setq other-output t))))))
+    (unless (and other-output (zerop (hash-table-count states)))
+      states)))
 
 (defun daemons-systemd--list ()
   "Return a list of daemons on a systemd system.
 Each item is (NAME [NAME ENABLED ACTIVE]).  Units that `systemctl
-list-units' does not report have never been loaded; they are inactive."
+list-units' does not report have never been loaded; they are inactive.
+If that call fails, ACTIVE is \"unknown\"."
   (let ((states (daemons-systemd--active-states)))
     (thread-last  (format "%s list-unit-files --type=service --no-legend" (daemons-systemd--cmd))
       (daemons--shell-command-to-string)
       (daemons--split-lines)
       (seq-map (lambda (line)
                  (let ((item (daemons-systemd--parse-list-item line))
-                       (state (gethash (car (split-string line)) states "inactive")))
+                       (state (if states
+                                  (gethash (car (split-string line)) states "inactive")
+                                "unknown")))
                    (list (car item)
                          (vconcat (cadr item)
                                   (vector (daemons-systemd--active-color state)))))))

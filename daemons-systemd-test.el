@@ -79,6 +79,29 @@ autovt@.service                              enabled "
     (should (equal "activating" (gethash "helper.service" states)))
     (should-not (gethash "\u25cf" states))))
 
+(ert-deftest systemd-active-states-query-failed-test ()
+  (let ((daemons--shell-command-to-string-fun
+         (lambda (_) "Failed to connect to bus: No such file or directory\n")))
+    (should-not (daemons-systemd--active-states)))
+  (let ((daemons--shell-command-to-string-fun
+         (lambda (_) (concat "Warning: something odd\n" daemons-systemd-test--units))))
+    (let ((states (daemons-systemd--active-states)))
+      (should (equal "running" (gethash "accounts-daemon.service" states)))
+      (should-not (gethash "Warning:" states))))
+  (let ((daemons--shell-command-to-string-fun (lambda (_) "")))
+    (should (hash-table-p (daemons-systemd--active-states)))))
+
+(ert-deftest systemd-list-query-failed-test ()
+  (let* ((daemons-systemd-color t)
+         (daemons--shell-command-to-string-fun
+          (daemons-systemd-test--list-command-fun
+           daemons-systemd-test--unit-files
+           "Failed to connect to bus: No such file or directory\n"))
+         (rows (daemons-systemd--list)))
+    (should (equal '("unknown" "unknown" "unknown")
+                   (mapcar (lambda (row) (aref (cadr row) 2)) rows)))
+    (should-not (get-text-property 0 'font-lock-face (aref (cadr (car rows)) 2)))))
+
 (ert-deftest systemd-active-colours-test ()
   (let ((daemons-systemd-color t))
     (dolist (case '(("running" . daemons-systemd-enabled)
