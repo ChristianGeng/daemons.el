@@ -400,3 +400,157 @@ A local /sudo:: directory, as from `daemons-always-sudo', is not remote."
     (should (equal (concat (format-time-string "%F") " 09:14")
                    (let ((default-directory "/ssh:box:/tmp/"))
                      (daemons-systemd--status-line-time timestamp))))))
+
+;; journal
+(defconst daemons-systemd-test--journal-output
+  (concat "Oct 11 14:42:39 host bash[4715]: \e[0;1;31merr line\e[0m\n"
+          "Oct 11 14:42:39 host bash[4715]: \e[0;1;38;5;185mwarn line\e[0m\n"
+          "Oct 11 14:42:39 host bash[4715]: info line\n")
+  "journalctl output with SYSTEMD_COLORS=1: an err, a warning and an info line.")
+
+(ert-deftest systemd-journal-command-test ()
+  (let ((daemons-systemd-color nil))
+    (let ((daemons-systemd-is-user nil))
+      (should (equal '("journalctl" "--no-pager" "-f" "-u" "foo.service")
+                     (daemons-systemd--journal-command "foo"))))
+    (let ((daemons-systemd-is-user t))
+      (should (equal '("journalctl" "--user" "--no-pager" "-f" "-u" "foo.timer")
+                     (daemons-systemd--journal-command "foo.timer"))))))
+
+(ert-deftest systemd-journal-command-asks-for-colours-test ()
+  (let ((daemons-systemd-color t)
+        (daemons-systemd-is-user t))
+    (should (equal '("env" "SYSTEMD_COLORS=1" "SYSTEMD_URLIFY=0"
+                     "journalctl" "--user" "--no-pager" "-f" "-u" "foo.service")
+                   (daemons-systemd--journal-command "foo")))))
+
+(ert-deftest systemd-journal-starts-process-test ()
+  "The journal follows in an async process in `default-directory'."
+  (let ((daemons-systemd-color nil)
+        (daemons-systemd-is-user t)
+        (args nil))
+    (cl-letf (((symbol-function 'make-process)
+               (lambda (&rest plist) (setq args plist) 'process)))
+      (with-temp-buffer
+        (should (eq 'process (daemons-systemd--journal "foo")))
+        (should (eq (current-buffer) (plist-get args :buffer)))
+        (should (equal '("journalctl" "--user" "--no-pager" "-f" "-u" "foo.service")
+                       (plist-get args :command)))
+        (should (plist-get args :file-handler))
+        (should (eq #'daemons-systemd--journal-filter (plist-get args :filter)))))))
+
+(ert-deftest systemd-journal-is-a-command-test ()
+  (should (eq 'daemons-systemd--journal (daemons--command 'journal 'daemons-systemd)))
+  (should (eq 'daemons-systemd--journal-target
+              (daemons--command 'journal-target 'daemons-systemd))))
+
+(ert-deftest systemd-journal-buffer-normalises-unit-test ()
+  "rygel and rygel.service follow the same journal, so share a buffer."
+  (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd)))
+    (let ((default-directory "/tmp/")
+          (daemons-systemd-is-user nil))
+      (should (equal (daemons--get-journal-buffer-name "rygel")
+                     (daemons--get-journal-buffer-name "rygel.service")))
+      (should (string-prefix-p "*daemons-journal rygel.service for "
+                               (daemons--get-journal-buffer-name "rygel")))
+      (should-not (equal (daemons--get-journal-buffer-name "rygel")
+                         (daemons--get-journal-buffer-name "rygel.timer"))))))
+
+(ert-deftest systemd-journal-buffer-per-scope-test ()
+  "A user unit's journal has a buffer apart from the system unit's of that name."
+  (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd)))
+    (let* ((default-directory "/tmp/")
+           (system (let ((daemons-systemd-is-user nil))
+                     (daemons--get-journal-buffer-name "rygel")))
+           (user (let ((daemons-systemd-is-user t))
+                   (daemons--get-journal-buffer-name "rygel"))))
+      (should-not (equal system user))
+      (should (string-prefix-p "*daemons-journal rygel.service --user for " user)))))
+
+(defun daemons-systemd-test--journal-faces ()
+  "Return each line of the current buffer with its face."
+  (mapcar (lambda (line)
+            (goto-char (point-min))
+            (search-forward line)
+            (cons (get-text-property (match-beginning 0) 'face) line))
+          (split-string (buffer-string) "\n" t)))
+
+(ert-deftest systemd-journal-line-test ()
+  (let ((daemons-systemd-color t))
+    (with-temp-buffer
+      (dolist (line (split-string daemons-systemd-test--journal-output "\n" t))
+        (insert (daemons-systemd--journal-line line) "\n"))
+      (should (equal '((daemons-systemd-bad . "Oct 11 14:42:39 host bash[4715]: err line")
+                       (daemons-systemd-changing . "Oct 11 14:42:39 host bash[4715]: warn line")
+                       (nil . "Oct 11 14:42:39 host bash[4715]: info line"))
+                     (daemons-systemd-test--journal-faces))))))
+
+(ert-deftest systemd-journal-line-without-colour-test ()
+  (let ((daemons-systemd-color nil))
+    (should-not (text-properties-at
+                 0 (daemons-systemd--journal-line "x \e[0;1;31merr\e[0m")))
+    (should (equal "x err" (daemons-systemd--journal-line "x \e[0;1;31merr\e[0m")))))
+
+(defmacro daemons-systemd-test--with-journal-process (&rest body)
+  "Run BODY in a buffer with a live cat process, bound to `process'."
+  (declare (indent 0))
+  `(with-temp-buffer
+     (let ((process (make-process :name "daemons-test-journal" :buffer (current-buffer)
+                                  :command '("cat") :connection-type 'pipe :noquery t
+                                  :sentinel #'ignore)))
+       (unwind-protect (progn ,@body)
+         (delete-process process)))))
+
+(ert-deftest systemd-journal-filter-split-output-test ()
+  "Output split anywhere, even inside an escape, is shown line by line."
+  (let ((daemons-systemd-color t))
+    (daemons-systemd-test--with-journal-process
+      (let ((output daemons-systemd-test--journal-output))
+        (daemons-systemd--journal-filter process (substring output 0 37))
+        (should (equal "" (buffer-string)))
+        (daemons-systemd--journal-filter process (substring output 37 100))
+        (should (equal "Oct 11 14:42:39 host bash[4715]: err line\n" (buffer-string)))
+        (daemons-systemd--journal-filter process (substring output 100)))
+      (should (equal '(daemons-systemd-bad daemons-systemd-changing nil)
+                     (mapcar #'car (daemons-systemd-test--journal-faces))))
+      (should-not (string-match-p "\e" (buffer-string))))))
+
+(ert-deftest systemd-journal-sentinel-flushes-last-line-test ()
+  "A last line without newline is shown when journalctl ends."
+  (let ((daemons-systemd-color t))
+    (daemons-systemd-test--with-journal-process
+      (daemons-systemd--journal-filter process "one\ntwo")
+      (delete-process process)
+      (daemons-systemd--journal-sentinel process "killed\n")
+      (should (equal "one\ntwo\n-- daemons-test-journal killed --\n" (buffer-string))))))
+
+(ert-deftest systemd-journal-follows-output-test ()
+  "`daemons-journal' shows journalctl's output as it comes, highlighted.
+A printf stands in for journalctl."
+  (let ((daemons-systemd-color t)
+        (daemons-systemd-is-user t)
+        (daemons-journal-function nil)
+        (daemons-always-sudo nil)
+        (make-process (symbol-function 'make-process))
+        (commands nil))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd))
+              ((symbol-function 'make-process)
+               (lambda (&rest plist)
+                 (push (plist-get plist :command) commands)
+                 (apply make-process
+                        (plist-put plist :command
+                                   (list "printf" "%s"
+                                         daemons-systemd-test--journal-output))))))
+      (let* ((buffer (save-current-buffer (daemons-journal "foo")))
+             (process (get-buffer-process buffer)))
+        (unwind-protect
+            (progn
+              (daemons-test--wait-for-exit process)
+              (should (equal '(("env" "SYSTEMD_COLORS=1" "SYSTEMD_URLIFY=0" "journalctl"
+                                "--user" "--no-pager" "-f" "-u" "foo.service"))
+                             commands))
+              (with-current-buffer buffer
+                (should (equal '(daemons-systemd-bad daemons-systemd-changing nil nil)
+                               (mapcar #'car (daemons-systemd-test--journal-faces))))
+                (should (string-suffix-p "-- journalctl finished --\n" (buffer-string)))))
+          (kill-buffer buffer))))))
