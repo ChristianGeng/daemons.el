@@ -351,8 +351,12 @@ Signal a `user-error' if the submodule has none."
                       (list (daemons--completing-read))))
   (let* ((status-line (daemons--status-line-function))
          (line (with-temp-buffer
-                 (when daemons-always-sudo (daemons--sudo))
-                 (funcall status-line name))))
+                 (let ((dir default-directory))
+                   (when daemons-always-sudo (daemons--sudo))
+                   (unwind-protect (funcall status-line name)
+                     ;; Remove the directory `daemons--sudo' made for this call.
+                     (unless (equal dir default-directory)
+                       (delete-directory (file-local-name default-directory))))))))
     (message "%s" line)
     line))
 

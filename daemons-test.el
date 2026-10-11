@@ -151,20 +151,33 @@ The messages are bound to `messages' in BODY."
 (daemons-define-submodule daemons-status-line-dir-test
   "Test: submodule whose status line shows where it ran"
   :test t
-  :commands '((status-line . (lambda (name) (concat name ": " default-directory))))
+  :commands '((status-line . (lambda (name)
+                               (if (equal name "fail")
+                                   (error "Status line failed")
+                                 (concat name ": " default-directory)))))
   :headers [("Daemon name" 100 t)]
   :list nil)
 
 (ert-deftest daemons-status-line-always-sudo-test ()
-  "The status line runs as root with `daemons-always-sudo', like other commands."
-  (dolist (case '((t . "foo: /sudo::/tmp/x/") (nil . "foo: /tmp/")))
-    (daemons-test--with-submodule 'daemons-status-line-dir-test
-      (let ((daemons-always-sudo (car case))
-            (default-directory "/tmp/"))
-        (cl-letf (((symbol-function 'daemons--sudo)
-                   (lambda () (setq default-directory "/sudo::/tmp/x/"))))
-          (should (equal (cdr case) (daemons-status-line "foo")))
-          (should (equal "/tmp/" default-directory)))))))
+  "The status line runs as root with `daemons-always-sudo', like other commands.
+The directory `daemons--sudo' makes is removed afterwards, also on error."
+  (dolist (sudo '(t nil))
+    (dolist (name '("foo" "fail"))
+      (daemons-test--with-submodule 'daemons-status-line-dir-test
+        (let* ((daemons-always-sudo sudo)
+               (default-directory "/tmp/")
+               (tempdir (file-name-as-directory (make-temp-file "daemons-test" t)))
+               (sudo-dir (concat "/sudo::" tempdir)))
+          (unwind-protect
+              (cl-letf (((symbol-function 'daemons--sudo)
+                         (lambda () (setq default-directory sudo-dir))))
+                (if (equal name "fail")
+                    (should-error (daemons-status-line name))
+                  (should (equal (concat "foo: " (if sudo sudo-dir "/tmp/"))
+                                 (daemons-status-line name))))
+                (should (equal "/tmp/" default-directory))
+                (should (eq (not sudo) (file-directory-p tempdir))))
+            (when (file-directory-p tempdir) (delete-directory tempdir))))))))
 
 (ert-deftest daemons-status-line-unsupported-test ()
   "An init system without a status line says so."
