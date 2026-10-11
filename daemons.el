@@ -86,9 +86,11 @@ See `daemons-define-submodule' for how to implement your own."
 (defcustom daemons-journal-function nil
   "Function that shows the journal of a daemon, or nil for the default viewer.
 `daemons-journal' calls it with the daemon name instead of following the
-journal into a buffer of its own.  It runs in the caller's
-`default-directory', so on a remote host if called from there, and in a
-local /sudo:: directory with `daemons-always-sudo'."
+journal into a buffer of its own, also on an init system that has no
+journal command.  It runs in the caller's `default-directory', so on a
+remote host if called from there.  `daemons-always-sudo' does not apply:
+the function gets only the daemon name and decides itself whether to use
+sudo."
   :type '(choice (const :tag "Default viewer" nil) function)
   :group 'daemons)
 
@@ -463,11 +465,6 @@ viewer.  Return the buffer of the default viewer."
           (funcall journal name)))
       (pop-to-buffer buffer)
       buffer))
-   (daemons-always-sudo
-    ;; The /sudo:: directory is kept: the viewer's buffers may go on using it.
-    (with-temp-buffer
-      (daemons--sudo)
-      (funcall daemons-journal-function name)))
    (t (funcall daemons-journal-function name))))
 
 ;;;###autoload

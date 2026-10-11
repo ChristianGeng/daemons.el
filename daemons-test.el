@@ -379,8 +379,8 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
                 (should (eq (not sudo) (file-directory-p tempdir)))))
           (when (file-directory-p tempdir) (delete-directory tempdir)))))))
 
-(ert-deftest daemons-journal-function-always-sudo-test ()
-  "`daemons-journal-function' runs as root with `daemons-always-sudo'."
+(ert-deftest daemons-journal-function-without-sudo-test ()
+  "`daemons-journal-function' runs in the caller's directory, even with `daemons-always-sudo'."
   (dolist (sudo '(t nil))
     (daemons-test--with-journal
       (let* ((daemons-always-sudo sudo)
@@ -388,10 +388,9 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
              (dirs nil)
              (daemons-journal-function (lambda (_name) (push default-directory dirs))))
         (cl-letf (((symbol-function 'daemons--sudo)
-                   (lambda () (setq default-directory "/sudo::/tmp/"))))
+                   (lambda () (ert-fail "daemons--sudo was called"))))
           (daemons-journal "foo")
-          (should (equal (list (if sudo "/sudo::/tmp/" "/tmp/")) dirs))
-          (should (equal "/tmp/" default-directory)))))))
+          (should (equal '("/tmp/") dirs)))))))
 
 (ert-deftest daemons-journal-function-without-journal-command-test ()
   "`daemons-journal-function' is called on an init system with no journal command."
