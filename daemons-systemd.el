@@ -264,7 +264,7 @@ other.  The state is coloured if `daemons-systemd-color' is set."
                   (funcall daemons-systemctl-command-fn
                            (format "show -p %s --value"
                                    daemons-systemd--status-line-properties)
-                           (shell-quote-argument unit))))
+                           unit)))
          (lines (split-string output "\n")))
     (when (equal (car (last lines)) "")
       (setq lines (butlast lines)))
