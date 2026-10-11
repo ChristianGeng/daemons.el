@@ -212,9 +212,15 @@ Does nothing unless `daemons-systemd-color' is set."
 
 (defconst daemons-systemd--status-line-properties
   "LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestamp"
-  "Unit properties `daemons-systemd--status-line' asks systemctl for.
-`systemctl show --value' prints their values in this order, the order of
-systemd's D-Bus interface, whatever the order given to -p.")
+  "Unit properties `daemons-systemd--status-line' asks systemctl for.")
+
+(defun daemons-systemd--show-properties (output)
+  "Return an alist of the Key=Value lines in `systemctl show' OUTPUT.
+Other lines, such as warnings on stderr, are skipped."
+  (let (properties)
+    (dolist (line (split-string output "\n") (nreverse properties))
+      (when (string-match "\\`\\([A-Za-z]+\\)=\\(.*\\)\\'" line)
+        (push (cons (match-string 1 line) (match-string 2 line)) properties)))))
 
 (defconst daemons-systemd--unit-type-regexp
   (concat "\\.\\(?:service\\|socket\\|device\\|mount\\|automount\\|swap"
@@ -240,6 +246,12 @@ systemd's D-Bus interface, whatever the order given to -p.")
       (propertize string 'face face)
     string))
 
+(defun daemons-systemd--remote-host-p ()
+  "Return non-nil if `default-directory' is on another host.
+A local /sudo:: directory, as from `daemons-always-sudo', is not."
+  (let ((host (file-remote-p default-directory 'host)))
+    (and host (not (member host (list (system-name) "localhost" ""))))))
+
 (defun daemons-systemd--status-line-time (timestamp)
   "Return the time of day in TIMESTAMP, with the date unless it is today.
 On a remote host, whose date may differ from ours, the date is always shown.
@@ -249,7 +261,7 @@ Return nil if TIMESTAMP has no date, as with \"n/a\"."
                       timestamp)
     (let ((date (match-string 1 timestamp))
           (time (match-string 2 timestamp)))
-      (if (and (not (file-remote-p default-directory))
+      (if (and (not (daemons-systemd--remote-host-p))
                (string= date (format-time-string "%F")))
           time
         (concat date " " time)))))
@@ -262,16 +274,18 @@ other.  The state is coloured if `daemons-systemd-color' is set."
   (let* ((unit (daemons-systemd--unit-name name))
          (output (daemons--shell-command-to-string
                   (funcall daemons-systemctl-command-fn
-                           (format "show -p %s --value"
+                           (format "show -p %s"
                                    daemons-systemd--status-line-properties)
                            unit)))
-         (lines (split-string output "\n")))
-    (when (equal (car (last lines)) "")
-      (setq lines (butlast lines)))
-    ;; Warnings on stderr, such as for an escaped unit name, come first.
-    (when (< (length lines) 5)
+         (properties (daemons-systemd--show-properties output))
+         (property (lambda (key) (or (cdr (assoc key properties)) ""))))
+    (unless (and (assoc "LoadState" properties) (assoc "ActiveState" properties))
       (error "Unexpected output from systemctl show %s: %s" unit output))
-    (pcase-let ((`(,load ,active ,sub ,file ,since) (last lines 5)))
+    (let ((load (funcall property "LoadState"))
+          (active (funcall property "ActiveState"))
+          (sub (funcall property "SubState"))
+          (file (funcall property "UnitFileState"))
+          (since (funcall property "ActiveEnterTimestamp")))
       (concat
        unit ": "
        (if (and (string= load "not-found") (string= active "inactive"))
