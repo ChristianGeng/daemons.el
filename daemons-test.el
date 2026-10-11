@@ -330,6 +330,22 @@ The directory `daemons--sudo' makes is removed afterwards, also on error."
         (should (= (point-max) (point)))
         (should (= (point-max) (window-point window)))))))
 
+(ert-deftest daemons-journal-failed-start-test ()
+  "A journal that fails to start leaves no buffer or sudo directory behind."
+  (daemons-test--with-journal
+    (let* ((daemons-always-sudo t)
+           (default-directory "/tmp/")
+           (tempdir (file-name-as-directory (make-temp-file "daemons-test" t))))
+      (unwind-protect
+          (cl-letf (((symbol-function 'daemons--sudo)
+                     (lambda () (setq default-directory (concat "/sudo::" tempdir))))
+                    ((symbol-function 'daemons-test--journal)
+                     (lambda (_name) (error "No journalctl"))))
+            (should-error (daemons-journal "foo"))
+            (should-not (get-buffer (daemons--get-journal-buffer-name "foo")))
+            (should-not (file-directory-p tempdir)))
+        (when (file-directory-p tempdir) (delete-directory tempdir))))))
+
 (ert-deftest daemons-journal-function-test ()
   "`daemons-journal-function' is called with the daemon name instead."
   (daemons-test--with-journal

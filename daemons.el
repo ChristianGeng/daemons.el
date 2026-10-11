@@ -463,7 +463,10 @@ viewer.  Return the buffer of the default viewer."
               (daemons--sudo)
               (unless (equal dir default-directory)
                 (setq daemons--journal-sudo-directory default-directory))))
-          (funcall journal name)))
+          (condition-case err
+              (funcall journal name)
+            (error (kill-buffer buffer)
+                   (signal (car err) (cdr err))))))
       (pop-to-buffer buffer)
       buffer))
    (t (funcall daemons-journal-function name))))
