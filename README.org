@@ -46,6 +46,15 @@ Of course you can also call the commands interactively, e.g. =M-x daemons-start=
 
 For a quick "is it up?", =M-x daemons-status-line= (or =daemons-status-line-at-point= on the unit at point) echoes one line instead of the whole status, e.g. =rygel.service: active (running) since 09:14 — enabled=. An unknown unit shows =no such unit=. This is ~systemd~ only; with =daemons-systemd-color= the state is coloured.
 
+To watch a unit's journal as it grows, =M-x daemons-journal= (or =daemons-journal-at-point=) follows =journalctl -f -u UNIT= (with =--user= when =daemons-systemd-is-user= is set) in a buffer of its own for each unit. It scrolls while point is at the end, highlights =err= and =warning= lines with =daemons-systemd-color=, and killing it stops =journalctl=. This is ~systemd~ only. To use another viewer, set =daemons-journal-function= to a function that takes the unit name, e.g. for [[https://github.com/SebastianMeisel/journalctl-mode][journalctl-mode]]:
+
+#+begin_src emacs-lisp
+(setq daemons-journal-function
+      (lambda (unit)
+        (journalctl--follow (append (when daemons-systemd-is-user '("--user"))
+                                    (list "-u" unit)))))
+#+end_src
+
 It looks something like this for systemd:
 
 [[./img/daemons-systemd-demo.png]]

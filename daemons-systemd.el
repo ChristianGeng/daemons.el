@@ -210,6 +210,68 @@ Does nothing unless `daemons-systemd-color' is set."
 
 (add-hook 'daemons-output-mode-hook #'daemons-systemd--setup-output)
 
+(defun daemons-systemd--journal-command (name)
+  "Return the command that follows the journal of the systemd unit NAME.
+With `daemons-systemd-color', journalctl is asked for colours, which
+mark the priority of each line (see `daemons-systemd--journal-line')."
+  (append (when daemons-systemd-color
+            (cons "env" (split-string daemons-systemd--colour-vars)))
+          '("journalctl")
+          (when daemons-systemd-is-user '("--user"))
+          (list "--no-pager" "-f" "-u" (daemons-systemd--unit-name name))))
+
+(defconst daemons-systemd--journal-priority-faces
+  '(("\e\\[0;1;31m" . daemons-systemd-bad)
+    ("\e\\[0;1;\\(?:33\\|38[;:]5[;:]185\\)m" . daemons-systemd-changing))
+  "The escapes journalctl starts err and warning lines with, and their faces.")
+
+(defun daemons-systemd--journal-line (line)
+  "Return the journalctl output LINE without escapes.
+A line of priority err and above, which journalctl colours red, gets
+`daemons-systemd-bad'; a warning, coloured yellow, gets
+`daemons-systemd-changing'."
+  (let ((face (and daemons-systemd-color
+                   (cdr (seq-find (lambda (escape-face)
+                                    (string-match-p (car escape-face) line))
+                                  daemons-systemd--journal-priority-faces))))
+        (text (replace-regexp-in-string daemons-systemd--escape-regexp "" line)))
+    (if face (propertize text 'face face) text)))
+
+(defun daemons-systemd--journal-filter (process string)
+  "Insert the complete lines of journalctl output STRING for PROCESS.
+An incomplete last line is kept until the rest of it arrives, so that
+an escape split between two outputs is still found."
+  (let* ((text (concat (process-get process 'daemons-systemd-pending) string))
+         (newline (string-match "\n[^\n]*\\'" text))
+         (complete (if newline (substring text 0 newline) nil)))
+    (process-put process 'daemons-systemd-pending
+                 (if newline (substring text (1+ newline)) text))
+    (when complete
+      (daemons--journal-insert
+       process
+       (mapconcat (lambda (line) (concat (daemons-systemd--journal-line line) "\n"))
+                  (split-string complete "\n") "")))))
+
+(defun daemons-systemd--journal-sentinel (process event)
+  "Insert what is left of the output of PROCESS, then note EVENT."
+  (unless (process-live-p process)
+    (when (< 0 (length (process-get process 'daemons-systemd-pending)))
+      (daemons-systemd--journal-filter process "\n"))
+    (daemons--journal-sentinel process event)))
+
+(defun daemons-systemd--journal (name)
+  "Follow the journal of the systemd unit NAME in the current buffer.
+journalctl runs in `default-directory', so on a remote host or as root
+if that is a TRAMP directory."
+  (make-process :name "journalctl"
+                :buffer (current-buffer)
+                :command (daemons-systemd--journal-command name)
+                :connection-type 'pipe
+                :noquery t
+                :file-handler t
+                :filter #'daemons-systemd--journal-filter
+                :sentinel #'daemons-systemd--journal-sentinel))
+
 (defconst daemons-systemd--status-line-properties
   "LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestamp"
   "Unit properties `daemons-systemd--status-line' asks systemctl for.")
@@ -312,7 +374,8 @@ other.  The state is coloured if `daemons-systemd-color' is set."
     (reload . (lambda (name) (funcall daemons-systemctl-command-fn "reload" name)))
     (enable . (lambda (name) (funcall daemons-systemctl-command-fn "enable" name)))
     (disable . (lambda (name) (funcall daemons-systemctl-command-fn "disable" name)))
-    (status-line . daemons-systemd--status-line))
+    (status-line . daemons-systemd--status-line)
+    (journal . daemons-systemd--journal))
 
   :list (daemons-systemd--list)
 

@@ -83,6 +83,15 @@ See `daemons-define-submodule' for how to implement your own."
   :type 'boolean
   :group 'daemons)
 
+(defcustom daemons-journal-function nil
+  "Function that shows the journal of a daemon, or nil for the default viewer.
+`daemons-journal' calls it with the daemon name instead of following the
+journal into a buffer of its own.  It runs in the caller's
+`default-directory', so on a remote host if called from there, and in a
+local /sudo:: directory with `daemons-always-sudo'."
+  :type '(choice (const :tag "Default viewer" nil) function)
+  :group 'daemons)
+
 ;; declarations
 (defvar daemons--shell-command-fun 'shell-command
   "Contains a `shell-command' function.
@@ -150,6 +159,10 @@ Override this to your own value for mocking out shell calls in tests.")
 (defun daemons--get-output-buffer-name (hostname)
   "Return the buffer name for daemons output on HOSTNAME."
   (format "*daemons-output for %s*" hostname))
+
+(defun daemons--get-journal-buffer-name (hostname name)
+  "Return the buffer name for the journal of daemon NAME on HOSTNAME."
+  (format "*daemons-journal %s for %s*" name hostname))
 
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
@@ -258,7 +271,10 @@ e.g. \\='((start . (lambda (x) (format \"service %s start\" x)))
        (stop . (lambda (x) (format \"service %s stop\" x))))
 
 The optional \\='status-line entry differs: its function takes a daemon
-name and returns the one-line status itself (see `daemons-status-line')."
+name and returns the one-line status itself (see `daemons-status-line').
+So does the optional \\='journal entry: its function takes a daemon name
+and starts a process that follows the daemon's journal in the current
+buffer, which is in `daemons-journal-mode' (see `daemons-journal')."
   (let  ((submodule (daemons--get-submodule submodule-name)))
     (plist-get submodule :commands)))
 
@@ -295,6 +311,11 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show a one-line status of the daemon NAME at point and return it."
   (interactive (list (daemons--daemon-at-point)))
   (daemons-status-line name))
+
+(defun daemons-journal-at-point (name)
+  "Follow the journal of the daemon NAME at point (see `daemons-journal')."
+  (interactive (list (daemons--daemon-at-point)))
+  (daemons-journal name))
 
 (defun daemons-start-at-point (name)
   "Start the daemon NAME at point in the daemons buffer."
@@ -359,6 +380,86 @@ Signal a `user-error' if the submodule has none."
                        (delete-directory (file-local-name default-directory))))))))
     (message "%s" line)
     line))
+
+;; journal
+(defvar-local daemons--journal-sudo-directory nil
+  "The directory `daemons--sudo' made for the current journal buffer, if any.")
+
+(defun daemons--journal-command ()
+  "Return the submodule's \\='journal function.
+Signal a `user-error' if the submodule has none."
+  (let ((submodule (daemons-init-system-submodule)))
+    (or (daemons--command 'journal submodule)
+        (user-error "%s does not support a journal" submodule))))
+
+(defun daemons--journal-insert (process string)
+  "Insert STRING at the end of the buffer of PROCESS.
+The buffer's point and its windows' points follow the new text only if
+they were at the end."
+  (let ((buffer (process-buffer process)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (let* ((mark (process-mark process))
+               (end (marker-position mark))
+               (moving (= (point) end))
+               (windows (seq-filter (lambda (window) (= (window-point window) end))
+                                    (get-buffer-window-list buffer nil t)))
+               (inhibit-read-only t))
+          (save-excursion
+            (goto-char mark)
+            (insert string)
+            (set-marker mark (point)))
+          (when moving (goto-char mark))
+          (dolist (window windows) (set-window-point window mark)))))))
+
+(defun daemons--journal-sentinel (process event)
+  "Note in the buffer of PROCESS that it ended, as EVENT says."
+  (unless (process-live-p process)
+    (daemons--journal-insert
+     process (format "-- %s %s --\n" (process-name process) (string-trim event)))))
+
+(defun daemons--journal-kill ()
+  "Stop the journal process of the current buffer.
+Also remove the directory `daemons--sudo' made for the buffer."
+  (let ((process (get-buffer-process (current-buffer))))
+    (when process (delete-process process)))
+  (when daemons--journal-sudo-directory
+    (ignore-errors
+      (delete-directory (file-local-name daemons--journal-sudo-directory)))))
+
+;;;###autoload
+(defun daemons-journal (name)
+  "Follow the journal of the daemon NAME as it grows.
+The default viewer shows it in a buffer of its own for each daemon and
+host, which scrolls while point is at the end; killing the buffer stops
+the journal process.  Set `daemons-journal-function' to use another
+viewer.  Return the buffer of the default viewer."
+  (interactive (progn (daemons--journal-command)
+                      (list (daemons--completing-read))))
+  (let ((journal (daemons--journal-command)))
+    (cond
+     ((not daemons-journal-function)
+      (let ((buffer (get-buffer-create
+                     (daemons--get-journal-buffer-name
+                      (daemons--get-user-and-hostname default-directory) name))))
+        (with-current-buffer buffer
+          (unless (process-live-p (get-buffer-process buffer))
+            (unless (derived-mode-p 'daemons-journal-mode) (daemons-journal-mode))
+            (let ((inhibit-read-only t)) (erase-buffer))
+            (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
+              (let ((dir default-directory))
+                (daemons--sudo)
+                (unless (equal dir default-directory)
+                  (setq daemons--journal-sudo-directory default-directory))))
+            (funcall journal name)))
+        (pop-to-buffer buffer)
+        buffer))
+     (daemons-always-sudo
+      ;; The /sudo:: directory is kept: the viewer's buffers may go on using it.
+      (with-temp-buffer
+        (daemons--sudo)
+        (funcall daemons-journal-function name)))
+     (t (funcall daemons-journal-function name)))))
 
 ;;;###autoload
 (defun daemons-start (name)
@@ -471,6 +572,12 @@ The remainder of FORMS will be ignored."
   "Daemons Output"
   "Mode for displaying output of Daemons commands"
   :group 'daemons)
+
+(define-derived-mode daemons-journal-mode special-mode
+  "Daemons Journal"
+  "Mode for following the journal of a daemon (see `daemons-journal')."
+  :group 'daemons
+  (add-hook 'kill-buffer-hook #'daemons--journal-kill nil t))
 
 (provide 'daemons)
 ;;; daemons.el ends here

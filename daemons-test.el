@@ -194,6 +194,199 @@ The directory `daemons--sudo' makes is removed afterwards, also on error."
                (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
       (should-error (call-interactively #'daemons-status-line) :type 'user-error))))
 
+;; journal tests
+(defun daemons-test--journal (name)
+  "Follow a stand-in journal of NAME: a cat process in the current buffer."
+  (setq daemons-test--journal-calls (cons (cons name default-directory)
+                                          daemons-test--journal-calls))
+  (make-process :name "daemons-test-journal"
+                :buffer (current-buffer)
+                :command '("cat")
+                :connection-type 'pipe
+                :noquery t
+                :filter #'daemons--journal-insert
+                :sentinel #'daemons--journal-sentinel))
+
+(defvar daemons-test--journal-calls nil
+  "The (NAME . DIRECTORY) of each call of `daemons-test--journal', latest first.")
+
+(daemons-define-submodule daemons-journal-test
+  "Test: submodule with a journal"
+  :test t
+  :commands '((journal . daemons-test--journal))
+  :headers [("Daemon name" 100 t)]
+  :list '(("foo" ["foo"]) ("bar" ["bar"])))
+
+(defmacro daemons-test--with-journal (&rest body)
+  "Run BODY with the journal test submodule; kill the journal buffers after."
+  (declare (indent 0))
+  `(let ((daemons-test--journal-calls nil)
+         (daemons-journal-function nil)
+         (daemons-always-sudo nil))
+     (daemons-test--with-submodule 'daemons-journal-test
+       (unwind-protect (progn ,@body)
+         (dolist (buffer (buffer-list))
+           (when (string-prefix-p "*daemons-journal " (buffer-name buffer))
+             (kill-buffer buffer)))))))
+
+(ert-deftest daemons-journal-test ()
+  "The journal is followed in a buffer of its own for each daemon."
+  (daemons-test--with-journal
+    (let ((buffer (daemons-journal "foo")))
+      (should (equal (daemons--get-journal-buffer-name
+                      (daemons--get-user-and-hostname default-directory) "foo")
+                     (buffer-name buffer)))
+      (should (string-prefix-p "*daemons-journal foo for " (buffer-name buffer)))
+      (should (eq 'daemons-journal-mode (buffer-local-value 'major-mode buffer)))
+      (should (process-live-p (get-buffer-process buffer)))
+      (should (equal '("foo") (mapcar #'car daemons-test--journal-calls)))
+      (should-not (eq buffer (daemons-journal "bar"))))))
+
+(ert-deftest daemons-journal-reuses-running-process-test ()
+  "Asking again for a journal that is being followed shows the same buffer."
+  (daemons-test--with-journal
+    (let* ((buffer (daemons-journal "foo"))
+           (process (get-buffer-process buffer)))
+      (should (eq buffer (daemons-journal "foo")))
+      (should (eq process (get-buffer-process buffer)))
+      (should (= 1 (length daemons-test--journal-calls))))))
+
+(ert-deftest daemons-journal-restarts-ended-process-test ()
+  "A journal whose process ended is started afresh in an emptied buffer."
+  (daemons-test--with-journal
+    (let* ((buffer (daemons-journal "foo"))
+           (process (get-buffer-process buffer)))
+      (process-send-eof process)
+      (while (process-live-p process) (accept-process-output process 0.1))
+      (accept-process-output nil 0.1)
+      (should (string-match-p "-- daemons-test-journal finished --"
+                              (with-current-buffer buffer (buffer-string))))
+      (daemons-journal "foo")
+      (should (process-live-p (get-buffer-process buffer)))
+      (should (equal "" (with-current-buffer buffer (buffer-string))))
+      (should (= 2 (length daemons-test--journal-calls))))))
+
+(ert-deftest daemons-journal-kill-buffer-kills-process-test ()
+  "No process is left over after `kill-buffer'."
+  (daemons-test--with-journal
+    (let* ((buffer (daemons-journal "foo"))
+           (process (get-buffer-process buffer)))
+      (should (process-live-p process))
+      (kill-buffer buffer)
+      (should-not (process-live-p process))
+      (should-not (memq process (process-list))))))
+
+(ert-deftest daemons-journal-scrolls-only-at-end-test ()
+  "New output moves point and window point only if they were at the end."
+  (daemons-test--with-journal
+    (let* ((buffer (daemons-journal "foo"))
+           (process (get-buffer-process buffer))
+           (window (selected-window)))
+      (set-window-buffer window buffer)
+      (with-current-buffer buffer
+        (daemons--journal-insert process "one\n")
+        (should (= (point-max) (point)))
+        (should (= (point-max) (window-point window)))
+        (goto-char (point-min))
+        (set-window-point window (point-min))
+        (daemons--journal-insert process "two\n")
+        (should (equal "one\ntwo\n" (buffer-string)))
+        (should (= (point-min) (point)))
+        (should (= (point-min) (window-point window)))
+        (goto-char (point-max))
+        (set-window-point window (point-max))
+        (daemons--journal-insert process "three\n")
+        (should (= (point-max) (point)))
+        (should (= (point-max) (window-point window)))))))
+
+(ert-deftest daemons-journal-function-test ()
+  "`daemons-journal-function' is called with the daemon name instead."
+  (daemons-test--with-journal
+    (let* ((names nil)
+           (daemons-journal-function (lambda (name) (push name names) 'shown)))
+      (should (eq 'shown (daemons-journal "foo")))
+      (should (equal '("foo") names))
+      (should-not daemons-test--journal-calls)
+      (should-not (seq-find (lambda (b) (string-prefix-p "*daemons-journal " (buffer-name b)))
+                            (buffer-list))))))
+
+(ert-deftest daemons-journal-at-point-test ()
+  (daemons-test--with-journal
+    (with-temp-buffer
+      (daemons-mode)
+      (setq tabulated-list-entries (daemons--list 'daemons-journal-test))
+      (tabulated-list-print)
+      (goto-char (point-min))
+      (forward-line 1)
+      (call-interactively #'daemons-journal-at-point)
+      (should (equal '("bar") (mapcar #'car daemons-test--journal-calls))))))
+
+(ert-deftest daemons-journal-completes-daemon-names-test ()
+  (daemons-test--with-journal
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _)
+                 (should (equal '("foo" "bar") (mapcar #'car collection)))
+                 "bar")))
+      (call-interactively #'daemons-journal)
+      (should (equal '("bar") (mapcar #'car daemons-test--journal-calls))))))
+
+(ert-deftest daemons-journal-always-sudo-test ()
+  "With `daemons-always-sudo' the journal follows as root, like other commands.
+The directory `daemons--sudo' makes is reused for the buffer and removed with it."
+  (dolist (sudo '(t nil))
+    (daemons-test--with-journal
+      (let* ((daemons-always-sudo sudo)
+             (default-directory "/tmp/")
+             (tempdir (file-name-as-directory (make-temp-file "daemons-test" t)))
+             (sudo-dir (concat "/sudo::" tempdir))
+             (sudo-calls 0))
+        (unwind-protect
+            (cl-letf (((symbol-function 'daemons--sudo)
+                       (lambda ()
+                         (setq sudo-calls (1+ sudo-calls))
+                         (unless (string-prefix-p "/sudo::" default-directory)
+                           (setq default-directory sudo-dir)))))
+              (let ((buffer (save-current-buffer (daemons-journal "foo"))))
+                (should (equal (if sudo sudo-dir "/tmp/") (cdar daemons-test--journal-calls)))
+                (should (equal "/tmp/" default-directory))
+                (process-send-eof (get-buffer-process buffer))
+                (while (get-buffer-process buffer) (accept-process-output nil 0.1))
+                (save-current-buffer (daemons-journal "foo"))
+                (should (equal (if sudo sudo-dir "/tmp/") (cdar daemons-test--journal-calls)))
+                (should (= (if sudo 1 0) sudo-calls))
+                (should (file-directory-p tempdir))
+                (kill-buffer buffer)
+                (should (eq (not sudo) (file-directory-p tempdir)))))
+          (when (file-directory-p tempdir) (delete-directory tempdir)))))))
+
+(ert-deftest daemons-journal-function-always-sudo-test ()
+  "`daemons-journal-function' runs as root with `daemons-always-sudo'."
+  (dolist (sudo '(t nil))
+    (daemons-test--with-journal
+      (let* ((daemons-always-sudo sudo)
+             (default-directory "/tmp/")
+             (dirs nil)
+             (daemons-journal-function (lambda (_name) (push default-directory dirs))))
+        (cl-letf (((symbol-function 'daemons--sudo)
+                   (lambda () (setq default-directory "/sudo::/tmp/"))))
+          (daemons-journal "foo")
+          (should (equal (list (if sudo "/sudo::/tmp/" "/tmp/")) dirs))
+          (should (equal "/tmp/" default-directory)))))))
+
+(ert-deftest daemons-journal-unsupported-test ()
+  "An init system without a journal says so."
+  (daemons-test--with-submodule 'daemons-no-status-line-test
+    (let ((err (should-error (daemons-journal "foo") :type 'user-error)))
+      (should (equal "daemons-no-status-line-test does not support a journal"
+                     (cadr err))))))
+
+(ert-deftest daemons-journal-unsupported-before-prompt-test ()
+  "M-x on an init system without a journal says so before prompting."
+  (daemons-test--with-submodule 'daemons-no-status-line-test
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
+      (should-error (call-interactively #'daemons-journal) :type 'user-error))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))
