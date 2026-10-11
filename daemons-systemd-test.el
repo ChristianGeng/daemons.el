@@ -440,7 +440,32 @@ A local /sudo:: directory, as from `daemons-always-sudo', is not remote."
         (should (eq #'daemons-systemd--journal-filter (plist-get args :filter)))))))
 
 (ert-deftest systemd-journal-is-a-command-test ()
-  (should (eq 'daemons-systemd--journal (daemons--command 'journal 'daemons-systemd))))
+  (should (eq 'daemons-systemd--journal (daemons--command 'journal 'daemons-systemd)))
+  (should (eq 'daemons-systemd--journal-target
+              (daemons--command 'journal-target 'daemons-systemd))))
+
+(ert-deftest systemd-journal-buffer-normalises-unit-test ()
+  "rygel and rygel.service follow the same journal, so share a buffer."
+  (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd)))
+    (let ((default-directory "/tmp/")
+          (daemons-systemd-is-user nil))
+      (should (equal (daemons--get-journal-buffer-name "rygel")
+                     (daemons--get-journal-buffer-name "rygel.service")))
+      (should (string-prefix-p "*daemons-journal rygel.service for "
+                               (daemons--get-journal-buffer-name "rygel")))
+      (should-not (equal (daemons--get-journal-buffer-name "rygel")
+                         (daemons--get-journal-buffer-name "rygel.timer"))))))
+
+(ert-deftest systemd-journal-buffer-per-scope-test ()
+  "A user unit's journal has a buffer apart from the system unit's of that name."
+  (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd)))
+    (let* ((default-directory "/tmp/")
+           (system (let ((daemons-systemd-is-user nil))
+                     (daemons--get-journal-buffer-name "rygel")))
+           (user (let ((daemons-systemd-is-user t))
+                   (daemons--get-journal-buffer-name "rygel"))))
+      (should-not (equal system user))
+      (should (string-prefix-p "*daemons-journal rygel.service --user for " user)))))
 
 (defun daemons-systemd-test--journal-faces ()
   "Return each line of the current buffer with its face."

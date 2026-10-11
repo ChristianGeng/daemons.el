@@ -259,6 +259,10 @@ an escape split between two outputs is still found."
       (daemons-systemd--journal-filter process "\n"))
     (daemons--journal-sentinel process event)))
 
+(defun daemons-systemd--journal-target (name)
+  "Return the unit whose journal NAME follows, with \" --user\" for a user unit."
+  (concat (daemons-systemd--unit-name name) (when daemons-systemd-is-user " --user")))
+
 (defun daemons-systemd--journal (name)
   "Follow the journal of the systemd unit NAME in the current buffer.
 journalctl runs in `default-directory', so on a remote host or as root
@@ -375,7 +379,8 @@ other.  The state is coloured if `daemons-systemd-color' is set."
     (enable . (lambda (name) (funcall daemons-systemctl-command-fn "enable" name)))
     (disable . (lambda (name) (funcall daemons-systemctl-command-fn "disable" name)))
     (status-line . daemons-systemd--status-line)
-    (journal . daemons-systemd--journal))
+    (journal . daemons-systemd--journal)
+    (journal-target . daemons-systemd--journal-target))
 
   :list (daemons-systemd--list)
 

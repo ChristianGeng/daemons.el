@@ -160,9 +160,17 @@ Override this to your own value for mocking out shell calls in tests.")
   "Return the buffer name for daemons output on HOSTNAME."
   (format "*daemons-output for %s*" hostname))
 
-(defun daemons--get-journal-buffer-name (hostname name)
-  "Return the buffer name for the journal of daemon NAME on HOSTNAME."
-  (format "*daemons-journal %s for %s*" name hostname))
+(defun daemons--get-journal-buffer-name (name)
+  "Return the buffer name for the journal of daemon NAME.
+It names what the journal follows, as the submodule's optional
+\\='journal-target command gives it for NAME, and where: the full TRAMP
+prefix (method, user, host and port) of a remote `default-directory', or
+the local user and host."
+  (let ((target (daemons--command 'journal-target (daemons-init-system-submodule))))
+    (format "*daemons-journal %s for %s*"
+            (if target (funcall target name) name)
+            (or (file-remote-p default-directory)
+                (daemons--get-user-and-hostname default-directory)))))
 
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
@@ -274,7 +282,10 @@ The optional \\='status-line entry differs: its function takes a daemon
 name and returns the one-line status itself (see `daemons-status-line').
 So does the optional \\='journal entry: its function takes a daemon name
 and starts a process that follows the daemon's journal in the current
-buffer, which is in `daemons-journal-mode' (see `daemons-journal')."
+buffer, which is in `daemons-journal-mode' (see `daemons-journal').  The
+optional \\='journal-target function takes a daemon name and returns
+what its journal follows, e.g. a normalised unit name and scope, so that
+names for the same journal share a buffer."
   (let  ((submodule (daemons--get-submodule submodule-name)))
     (plist-get submodule :commands)))
 
@@ -439,9 +450,7 @@ viewer.  Return the buffer of the default viewer."
   (let ((journal (daemons--journal-command)))
     (cond
      ((not daemons-journal-function)
-      (let ((buffer (get-buffer-create
-                     (daemons--get-journal-buffer-name
-                      (daemons--get-user-and-hostname default-directory) name))))
+      (let ((buffer (get-buffer-create (daemons--get-journal-buffer-name name))))
         (with-current-buffer buffer
           (unless (process-live-p (get-buffer-process buffer))
             (unless (derived-mode-p 'daemons-journal-mode) (daemons-journal-mode))

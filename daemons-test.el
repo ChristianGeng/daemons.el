@@ -239,14 +239,28 @@ The directory `daemons--sudo' makes is removed afterwards, also on error."
   "The journal is followed in a buffer of its own for each daemon."
   (daemons-test--with-journal
     (let ((buffer (daemons-journal "foo")))
-      (should (equal (daemons--get-journal-buffer-name
-                      (daemons--get-user-and-hostname default-directory) "foo")
-                     (buffer-name buffer)))
+      (should (equal (daemons--get-journal-buffer-name "foo") (buffer-name buffer)))
       (should (string-prefix-p "*daemons-journal foo for " (buffer-name buffer)))
       (should (eq 'daemons-journal-mode (buffer-local-value 'major-mode buffer)))
       (should (process-live-p (get-buffer-process buffer)))
       (should (equal '("foo") (mapcar #'car daemons-test--journal-calls)))
       (should-not (eq buffer (daemons-journal "bar"))))))
+
+(ert-deftest daemons-journal-buffer-remote-identity-test ()
+  "Journal buffers differ by the method, user, host and port of a remote directory."
+  (daemons-test--with-journal
+    (let ((names (mapcar (lambda (dir)
+                           (let ((default-directory dir))
+                             (daemons--get-journal-buffer-name "foo")))
+                         '("/ssh:me@example.com:/" "/scp:me@example.com:/"
+                           "/ssh:you@example.com:/" "/ssh:me@example.org:/"
+                           "/ssh:me@example.com#2222:/"))))
+      (should (equal "*daemons-journal foo for /ssh:me@example.com#2222:*"
+                     (car (last names))))
+      (should (= 5 (length (delete-dups (copy-sequence names)))))
+      (should (equal (car names)
+                     (let ((default-directory "/ssh:me@example.com:/etc/"))
+                       (daemons--get-journal-buffer-name "foo")))))))
 
 (ert-deftest daemons-journal-reuses-running-process-test ()
   "Asking again for a journal that is being followed shows the same buffer."
