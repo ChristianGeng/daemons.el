@@ -337,20 +337,19 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   (interactive (list (daemons--completing-read)))
   (daemons--run-with-output-buffer 'status name))
 
-(defun daemons--status-line (name)
-  "Return the one-line status of the daemon NAME from the submodule.
-Signal a `user-error' if the submodule has no \\='status-line command."
-  (let* ((submodule (daemons-init-system-submodule))
-         (status-line-fun (daemons--command 'status-line submodule)))
-    (unless status-line-fun
-      (user-error "%s does not support a one-line status" submodule))
-    (funcall status-line-fun name)))
+(defun daemons--status-line-function ()
+  "Return the submodule's \\='status-line function.
+Signal a `user-error' if the submodule has none."
+  (let ((submodule (daemons-init-system-submodule)))
+    (or (daemons--command 'status-line submodule)
+        (user-error "%s does not support a one-line status" submodule))))
 
 ;;;###autoload
 (defun daemons-status-line (name)
   "Show a one-line status of the daemon NAME in the echo area and return it."
-  (interactive (list (daemons--completing-read)))
-  (let ((line (daemons--status-line name)))
+  (interactive (progn (daemons--status-line-function)
+                      (list (daemons--completing-read))))
+  (let ((line (funcall (daemons--status-line-function) name)))
     (message "%s" line)
     line))
 

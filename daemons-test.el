@@ -156,6 +156,13 @@ The messages are bound to `messages' in BODY."
                      (cadr err))))
     (should-not messages)))
 
+(ert-deftest daemons-status-line-unsupported-before-prompt-test ()
+  "M-x on an init system without a status line says so before prompting."
+  (daemons-test--with-submodule 'daemons-no-status-line-test
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
+      (should-error (call-interactively #'daemons-status-line) :type 'user-error))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))
