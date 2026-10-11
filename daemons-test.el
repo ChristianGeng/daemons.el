@@ -210,6 +210,12 @@ The directory `daemons--sudo' makes is removed afterwards, also on error."
 (defvar daemons-test--journal-calls nil
   "The (NAME . DIRECTORY) of each call of `daemons-test--journal', latest first.")
 
+(defun daemons-test--wait-for-exit (process)
+  "Wait for PROCESS to exit; fail the test if it still runs after 5 seconds."
+  (with-timeout (5 (ert-fail (format "%s still running" process)))
+    (while (process-live-p process) (accept-process-output process 0.1)))
+  (accept-process-output nil 0.05))
+
 (daemons-define-submodule daemons-journal-test
   "Test: submodule with a journal"
   :test t
@@ -257,8 +263,7 @@ The directory `daemons--sudo' makes is removed afterwards, also on error."
     (let* ((buffer (daemons-journal "foo"))
            (process (get-buffer-process buffer)))
       (process-send-eof process)
-      (while (process-live-p process) (accept-process-output process 0.1))
-      (accept-process-output nil 0.1)
+      (daemons-test--wait-for-exit process)
       (should (string-match-p "-- daemons-test-journal finished --"
                               (with-current-buffer buffer (buffer-string))))
       (daemons-journal "foo")
@@ -349,8 +354,9 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
               (let ((buffer (save-current-buffer (daemons-journal "foo"))))
                 (should (equal (if sudo sudo-dir "/tmp/") (cdar daemons-test--journal-calls)))
                 (should (equal "/tmp/" default-directory))
-                (process-send-eof (get-buffer-process buffer))
-                (while (get-buffer-process buffer) (accept-process-output nil 0.1))
+                (let ((process (get-buffer-process buffer)))
+                  (process-send-eof process)
+                  (daemons-test--wait-for-exit process))
                 (save-current-buffer (daemons-journal "foo"))
                 (should (equal (if sudo sudo-dir "/tmp/") (cdar daemons-test--journal-calls)))
                 (should (= (if sudo 1 0) sudo-calls))

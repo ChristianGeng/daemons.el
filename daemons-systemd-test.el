@@ -520,8 +520,7 @@ A printf stands in for journalctl."
              (process (get-buffer-process buffer)))
         (unwind-protect
             (progn
-              (while (process-live-p process) (accept-process-output process 0.1))
-              (accept-process-output nil 0.1)
+              (daemons-test--wait-for-exit process)
               (should (equal '(("env" "SYSTEMD_COLORS=1" "SYSTEMD_URLIFY=0" "journalctl"
                                 "--user" "--no-pager" "-f" "-u" "foo.service"))
                              commands))
