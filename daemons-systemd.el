@@ -444,20 +444,59 @@ The keys are unit names such as \"foo.service\".  Return nil if
     (unless (and other-output (zerop (hash-table-count states)))
       states)))
 
+(defun daemons-systemd--alias-targets (aliases)
+  "Return a hash table of the unit each of ALIASES is an alias of.
+ALIASES are unit names such as \"dbus-org.bluez.service\"; templates
+must not be among them, as `systemctl show' rejects those.  One
+`systemctl show -p Id' call resolves all of them.  It prints the Ids in
+order and stops at a name it rejects, so the aliases before that one are
+still resolved.  systemd before 246 lists no unit file as an alias, so
+there this is not called."
+  (let ((ids nil))
+    (dolist (line (daemons--split-lines
+                   (daemons--shell-command-to-string
+                    (format "%s show -p Id %s" (daemons-systemd--cmd)
+                            (mapconcat #'shell-quote-argument aliases " ")))))
+      (when (string-match "\\`Id=\\(.+\\)\\'" line)
+        (push (match-string 1 line) ids)))
+    (let ((targets (make-hash-table :test 'equal)))
+      ;; Stops at the shorter list: aliases without an Id stay unresolved.
+      (seq-mapn (lambda (alias id) (puthash alias id targets))
+                aliases (nreverse ids))
+      targets)))
+
 (defun daemons-systemd--list ()
   "Return a list of daemons on a systemd system.
 Each item is (NAME [NAME ENABLED ACTIVE]).  Units that `systemctl
 list-units' does not report have never been loaded; they are inactive.
-If that call fails, ACTIVE is \"unknown\"."
-  (let ((states (daemons-systemd--active-states)))
-    (thread-last  (format "%s list-unit-files --type=service --no-legend" (daemons-systemd--cmd))
-      (daemons--shell-command-to-string)
-      (daemons--split-lines)
+An alias, which `systemctl list-units' reports under its unit's name,
+shows the state of that unit (see `daemons-systemd--alias-targets').
+If `systemctl list-units' fails, ACTIVE is \"unknown\"."
+  (let* ((states (daemons-systemd--active-states))
+         (lines (daemons--split-lines
+                 (daemons--shell-command-to-string
+                  (format "%s list-unit-files --type=service --no-legend"
+                          (daemons-systemd--cmd)))))
+         (aliases (and states
+                       (seq-filter
+                        (lambda (unit)
+                          (not (or (gethash unit states)
+                                   (string-match-p "@\\." unit))))
+                        (delq nil (mapcar
+                                   (lambda (line)
+                                     (let ((parts (split-string line)))
+                                       (and (equal (cadr parts) "alias") (car parts))))
+                                   lines)))))
+         (targets (and aliases (daemons-systemd--alias-targets aliases))))
+    (thread-last lines
       (seq-map (lambda (line)
-                 (let ((item (daemons-systemd--parse-list-item line))
-                       (state (if states
-                                  (gethash (car (split-string line)) states "inactive")
-                                "unknown")))
+                 (let* ((item (daemons-systemd--parse-list-item line))
+                        (unit (car (split-string line)))
+                        (state (cond ((not states) "unknown")
+                                     ((gethash unit states))
+                                     ((and targets (gethash unit targets))
+                                      (gethash (gethash unit targets) states "inactive"))
+                                     (t "inactive"))))
                    (list (car item)
                          (vconcat (cadr item)
                                   (vector (daemons-systemd--active-color state)))))))
