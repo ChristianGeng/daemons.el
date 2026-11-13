@@ -273,10 +273,14 @@ See `daemons-command-output'.  Return the message."
 
 (defun daemons--machine (dir)
   "Return the machine DIR is on: its TRAMP prefix, or nil on this host.
-A local /sudo:: directory, as from `daemons-always-sudo', is this host."
-  (let ((host (file-remote-p dir 'host)))
-    (unless (or (null host) (member host (list (system-name) "localhost" "")))
-      (file-remote-p dir))))
+A local /sudo:: directory, as from `daemons-always-sudo', is this host;
+an ssh connection, also to localhost on some port, is another machine."
+  (let ((prefix (file-remote-p dir)))
+    (unless (or (null prefix)
+                (and (string-match-p "\\`/\\(?:sudo\\|doas\\|su\\):[^:|]*:\\'" prefix)
+                     (member (file-remote-p dir 'host)
+                             (list (system-name) "localhost" ""))))
+      prefix)))
 
 (defun daemons--refresh-list-buffer ()
   "Re-read the lists of daemons on this machine shown in buffers.

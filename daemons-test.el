@@ -530,6 +530,14 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
               (should (string-match-p "foo +up" (buffer-string)))))
         (kill-buffer root-list)))))
 
+(ert-deftest daemons-machine-test ()
+  "Local sudo directories are this host; ssh, also to localhost, is not."
+  (should-not (daemons--machine "/tmp/"))
+  (should-not (daemons--machine "/sudo::/tmp/"))
+  (should (equal "/ssh:me@localhost#2222:" (daemons--machine "/ssh:me@localhost#2222:/tmp/")))
+  ;; Multi-hop: another machine, whatever part of the prefix TRAMP returns.
+  (should (daemons--machine "/ssh:h|sudo:h:/tmp/")))
+
 (ert-deftest daemons-start-echoes-one-line-output-test ()
   "One line of output, such as an error, is echoed before the state."
   (daemons-test--with-state
