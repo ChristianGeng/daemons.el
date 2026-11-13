@@ -17,6 +17,7 @@
 ;;; Code:
 (require 'daemons)
 (require 'transient)
+(require 'cl-lib)
 
 (defvar daemons--dispatch-name nil
   "The daemon the menu of `daemons-dispatch' is for.")
@@ -44,8 +45,14 @@ menu shows the new state."
             ;; As `daemons-status-line' does it, as root with
             ;; `daemons-always-sudo', but without its message.
             (let ((inhibit-message t)
-                  (message-log-max nil))
-              (daemons-status-line name))
+                  (message-log-max nil)
+                  (submodule daemons--dispatch-submodule))
+              ;; Use the init system found when the menu opened: finding
+              ;; it again on every redraw costs round trips on a remote host.
+              (cl-letf (((symbol-function 'daemons-init-system-submodule)
+                         (let ((find (symbol-function 'daemons-init-system-submodule)))
+                           (lambda () (or submodule (funcall find))))))
+                (daemons-status-line name)))
           (error (format "%s: %s" name (error-message-string err))))
       name)))
 
