@@ -155,6 +155,8 @@ service.  Both should be strings.
     (concat
      ;; The start of a command: of the string, or after ; & | or (.
      "\\(?:\\`\\|[;&|(]\\)[ \t]*"
+     ;; Optional variable assignments, such as LC_ALL=C.
+     "\\(?:[A-Za-z_][A-Za-z0-9_]*=" "[^ \t;&|()]*" "[ \t]+\\)*"
      ;; An optional sudo or doas with its options and their arguments.
      "\\(?:\\(?:" word "/\\)?\\(?:sudo\\|doas\\)"
      "\\(?:[ \t]+" word "\\)*?[ \t]+\\)?"
@@ -184,8 +186,9 @@ commands working."
 (defconst daemons-systemd--status-font-lock-keywords
   '(("^ *\\(Loaded\\|Active\\):" 1 'daemons-systemd-label)
     ("^ *Active: \\(active ([^)\n]*)\\)" 1 'daemons-systemd-enabled)
-    ("^ *Active: \\(failed\\|inactive (dead)\\)" 1 'daemons-systemd-bad)
-    ("^ *Active: \\(\\(?:de\\)?activating\\|reloading\\)" 1 'daemons-systemd-changing))
+    ("^ *Active: \\(failed\\(?: ([^)\n]*)\\)?\\|inactive (dead)\\)" 1 'daemons-systemd-bad)
+    ("^ *Active: \\(\\(?:\\(?:de\\)?activating\\|reloading\\)\\(?: ([^)\n]*)\\)?\\)"
+     1 'daemons-systemd-changing))
   "Font-lock keywords for systemctl status output.")
 
 (defconst daemons-systemd--escape-regexp

@@ -104,7 +104,9 @@ Return the fontified buffer text and the command that was run."
                     ("echo systemctl; systemctl status foo"
                      . "echo systemctl; env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
                     ("systemctl-wrapper foo"
-                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; systemctl-wrapper foo")))
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; systemctl-wrapper foo")
+                    ("LC_ALL=C sudo systemctl status foo"
+                     . "LC_ALL=C sudo env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")))
       (let ((daemons-systemctl-command-fn (lambda (_command _service) (car case))))
         (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))
         ;; Independent of the syntax table of the buffer it runs in.
@@ -144,3 +146,15 @@ Return the fontified buffer text and the command that was run."
     (should (equal "systemctl --user status dtest" command))
     (should-not (daemons-systemd-test--face text "active (running)"))
     (should-not (daemons-systemd-test--face text "Loaded:"))))
+
+(ert-deftest systemd-status-colours-whole-state-test ()
+  "The parenthesised part of a failed or changing state is coloured too."
+  (dolist (case '(("failed (Result: exit-code)" . daemons-systemd-bad)
+                  ("activating (start-pre)" . daemons-systemd-changing)))
+    (with-temp-buffer
+      (insert "   Active: " (car case) " since Sun\n")
+      (setq font-lock-defaults '(daemons-systemd--status-font-lock-keywords t))
+      (font-lock-ensure)
+      (goto-char (point-min))
+      (search-forward (car case))
+      (should (eq (cdr case) (get-text-property (1- (point)) 'face))))))
