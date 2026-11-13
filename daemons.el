@@ -36,7 +36,9 @@
 
 ;; Fix for Emacs 27 byte compilation errors relating to thread-last. See:
 ;; https://github.com/cbowdon/daemons.el/issues/10#issuecomment-392261477
-(eval-when-compile (require 'subr-x))
+;; Also needed at run time: before Emacs 28 nothing autoloads string-trim
+;; and its relatives.
+(require 'subr-x)
 
 ;; customization
 (defgroup daemons nil
@@ -242,7 +244,8 @@ See `daemons-command-output'.  Return the message."
                          (progn (daemons--run command daemon-name)
                                 (string-trim (buffer-string)))
                        (unless (equal dir default-directory)
-                         (delete-directory (file-local-name default-directory)))))))
+                         (delete-directory (or (file-remote-p default-directory 'localname)
+                                               default-directory)))))))
          (status-line (daemons--command 'status-line (daemons-init-system-submodule))))
     (if (string-match-p "\n" output)
         (progn (daemons--show-output command daemon-name output) nil)
@@ -268,14 +271,22 @@ See `daemons-command-output'.  Return the message."
       (daemons-output-mode))
     (daemons--switch-output-buffer-create hostname)))
 
+(defun daemons--machine (dir)
+  "Return the machine DIR is on: its TRAMP prefix, or nil on this host.
+A local /sudo:: directory, as from `daemons-always-sudo', is this host."
+  (let ((host (file-remote-p dir 'host)))
+    (unless (or (null host) (member host (list (system-name) "localhost" "")))
+      (file-remote-p dir))))
+
 (defun daemons--refresh-list-buffer ()
-  "Re-read the list of daemons for this host, if it is shown in a buffer.
+  "Re-read the lists of daemons on this machine shown in buffers.
+That is the list as the user and as root, e.g. with `daemons-always-sudo'.
 Point stays on the same daemon."
-  (let ((buffer (get-buffer (daemons--get-list-buffer-name
-                             (daemons--get-user-and-hostname default-directory)))))
-    (when (buffer-live-p buffer)
+  (let ((machine (daemons--machine default-directory)))
+    (dolist (buffer (buffer-list))
       (with-current-buffer buffer
-        (when (derived-mode-p 'daemons-mode)
+        (when (and (derived-mode-p 'daemons-mode)
+                   (equal machine (daemons--machine default-directory)))
           (revert-buffer))))))
 
 (defun daemons--run-changing-state (command daemon-name)
@@ -543,37 +554,43 @@ viewer.  Return the buffer of the default viewer."
 
 ;;;###autoload
 (defun daemons-start (name)
-  "Start the daemon NAME.  Show results in an output buffer."
+  "Start the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
   (daemons--run-changing-state 'start name))
 
 ;;;###autoload
 (defun daemons-stop (name)
-  "Stop the daemon NAME.  Show results in an output buffer."
+  "Stop the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
   (daemons--run-changing-state 'stop name))
 
 ;;;###autoload
 (defun daemons-restart (name)
-  "Restart the daemon NAME.  Show results in an ouptut buffer."
+  "Restart the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
   (daemons--run-changing-state 'restart name))
 
 ;;;###autoload
 (defun daemons-reload (name)
-  "Reload the daemon NAME.  Show results in an output buffer."
+  "Reload the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
   (daemons--run-changing-state 'reload name))
 
 ;;;###autoload
 (defun daemons-enable (name)
-  "Enable the daemon NAME.  Show results in an output buffer."
+  "Enable the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
   (daemons--run-changing-state 'enable name))
 
 ;;;###autoload
 (defun daemons-disable (name)
-  "Disable the daemon NAME.  Show results in an output buffer."
+  "Disable the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
   (daemons--run-changing-state 'disable name))
 

@@ -512,6 +512,24 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
     (should-not (get-buffer (daemons--get-output-buffer-name
                              (daemons--get-user-and-hostname default-directory))))))
 
+(ert-deftest daemons-start-refreshes-root-list-test ()
+  "A list running as root, e.g. with `daemons-always-sudo', is refreshed too."
+  (daemons-test--with-state
+    (let ((root-list (get-buffer-create
+                      (daemons--get-list-buffer-name
+                       (daemons--get-user-and-hostname "/sudo::/tmp/")))))
+      (unwind-protect
+          (progn
+            (with-current-buffer root-list
+              (setq default-directory "/sudo::/tmp/")
+              (daemons-mode)
+              (daemons--refresh-list)
+              (tabulated-list-print t))
+            (daemons-start "foo")
+            (with-current-buffer root-list
+              (should (string-match-p "foo +up" (buffer-string)))))
+        (kill-buffer root-list)))))
+
 (ert-deftest daemons-start-echoes-one-line-output-test ()
   "One line of output, such as an error, is echoed before the state."
   (daemons-test--with-state
