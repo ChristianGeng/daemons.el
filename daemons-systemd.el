@@ -281,15 +281,15 @@ an escape split between two outputs is still found."
 (defun daemons-systemd--journal (name)
   "Follow the journal of the systemd unit NAME in the current buffer.
 journalctl runs in `default-directory', so on a remote host or as root
-if that is a TRAMP directory."
-  (make-process :name "journalctl"
-                :buffer (current-buffer)
-                :command (daemons-systemd--journal-command name)
-                :connection-type 'pipe
-                :noquery t
-                :file-handler t
-                :filter #'daemons-systemd--journal-filter
-                :sentinel #'daemons-systemd--journal-sentinel))
+if that is a TRAMP directory: `start-file-process' honours that on every
+supported Emacs, where `make-process' needs Emacs 27 for it."
+  (let* ((process-connection-type nil)  ; a pipe, not a pty
+         (process (apply #'start-file-process "journalctl" (current-buffer)
+                         (daemons-systemd--journal-command name))))
+    (set-process-query-on-exit-flag process nil)
+    (set-process-filter process #'daemons-systemd--journal-filter)
+    (set-process-sentinel process #'daemons-systemd--journal-sentinel)
+    process))
 
 (defconst daemons-systemd--status-line-properties
   "LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestamp"

@@ -171,13 +171,20 @@ the local user and host, which is root with `daemons-always-sudo'."
   (let ((target (daemons--command 'journal-target (daemons-init-system-submodule))))
     (format "*daemons-journal %s for %s*"
             (if target (funcall target name) name)
-            (or (file-remote-p default-directory)
+            (or (and (not (daemons--local-sudo-p default-directory))
+                     (file-remote-p default-directory))
                 (daemons--get-user-and-hostname
                  (if daemons-always-sudo "/sudo::" default-directory))))))
 
 (defun daemons--local-name (file)
   "Return FILE without its TRAMP prefix, like `file-local-name' of Emacs 26."
   (or (file-remote-p file 'localname) file))
+
+(defun daemons--local-sudo-p (dir)
+  "Return non-nil if DIR is a TRAMP directory on this host, e.g. /sudo::/tmp/.
+Such a directory, as `daemons-always-sudo' makes, names the local host."
+  (and (file-remote-p dir)
+       (member (file-remote-p dir 'host) (list (system-name) "localhost" ""))))
 
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
@@ -462,13 +469,15 @@ viewer.  Return the buffer of the default viewer."
         (unless (process-live-p (get-buffer-process buffer))
           (unless (derived-mode-p 'daemons-journal-mode) (daemons-journal-mode))
           (let ((inhibit-read-only t)) (erase-buffer))
-          (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
-            (let ((dir default-directory))
-              (daemons--sudo)
-              (unless (equal dir default-directory)
-                (setq daemons--journal-sudo-directory default-directory))))
           (condition-case err
-              (funcall journal name)
+              (progn
+                (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
+                  (let ((dir default-directory))
+                    (daemons--sudo)
+                    (unless (equal dir default-directory)
+                      (setq daemons--journal-sudo-directory default-directory))))
+                (funcall journal name))
+            ;; Killing the buffer also removes the sudo directory.
             (error (kill-buffer buffer)
                    (signal (car err) (cdr err))))))
       (pop-to-buffer buffer)

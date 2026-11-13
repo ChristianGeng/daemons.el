@@ -446,6 +446,14 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
                (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
       (should-error (call-interactively #'daemons-journal) :type 'user-error))))
 
+(ert-deftest daemons-journal-sudo-failure-kills-buffer-test ()
+  "If becoming root fails, no half-made journal buffer is left."
+  (daemons-test--with-journal
+    (let ((daemons-always-sudo t))
+      (cl-letf (((symbol-function 'daemons--sudo) (lambda () (error "mktemp failed"))))
+        (should-error (daemons-journal "foo"))
+        (should-not (get-buffer (daemons--get-journal-buffer-name "foo")))))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))
