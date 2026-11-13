@@ -573,7 +573,7 @@ directory that is $XDG_CONFIG_HOME."
 
 (ert-deftest systemd-edit-show-command-test ()
   (dolist (case '((t . "systemctl --user show -p LoadState -p FragmentPath foo.service")
-                  (nil . "systemctl show -p LoadState -p FragmentPath a\\ b.service")))
+                  (nil . "systemctl show -p LoadState -p FragmentPath a b.service")))
     (let ((daemons-systemd-is-user (car case))
           (default-directory "/tmp/"))
       (daemons-systemd-test--with-show "LoadState=loaded\nFragmentPath=/usr/lib/x\n"
@@ -682,3 +682,52 @@ directory that is $XDG_CONFIG_HOME."
                 (should (equal "systemctl --user daemon-reload" (car commands)))
                 (should (member "Ran `systemctl --user daemon-reload'" messages)))
             (kill-buffer buffer)))))))
+
+(ert-deftest systemd-edit-instance-of-own-template-test ()
+  "An instance gets its own override, not the template all instances share."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (daemons-systemd-test--with-show nil
+      (let ((template (expand-file-name "systemd/user/foo@.service" config)))
+        (make-directory (file-name-directory template) t)
+        (write-region "" nil template)
+        (let ((daemons--shell-command-to-string-fun
+               (lambda (_) (format "LoadState=loaded\nFragmentPath=%s\n" template))))
+          (should (equal (concat config "/systemd/user/foo@bar.service.d/override.conf")
+                         (daemons-systemd--edit-file "foo@bar"))))))))
+
+(ert-deftest systemd-edit-template-test ()
+  "A template gets an override without asking systemctl show, which rejects it."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (daemons-systemd-test--with-show "should not be asked"
+      (should (equal (concat config "/systemd/user/getty@.service.d/override.conf")
+                     (daemons-systemd--edit-file "getty@.service")))
+      (should-not commands))))
+
+(ert-deftest systemd-edit-bad-config-home-test ()
+  "An empty or relative $XDG_CONFIG_HOME counts as unset."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (dolist (value '("" "relative/dir"))
+      (let ((process-environment (cons (concat "XDG_CONFIG_HOME=" value)
+                                       process-environment))
+            (daemons--shell-command-to-string-fun
+             (lambda (_) "LoadState=loaded\nFragmentPath=/usr/lib/systemd/user/foo.service\n")))
+        (should (equal "~/.config/systemd/user/foo.service.d/override.conf"
+                       (daemons-systemd--edit-file "foo")))))))
+
+(ert-deftest systemd-edit-user-unit-with-always-sudo-test ()
+  "A user unit is the user's, also when the list runs in a local /sudo:: directory."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/sudo::/tmp/"))
+    (daemons-systemd-test--with-show
+        "LoadState=loaded\nFragmentPath=/usr/lib/systemd/user/foo.service\n"
+      (should (equal (concat config "/systemd/user/foo.service.d/override.conf")
+                     (daemons-systemd--edit-file "foo"))))))
+
+(ert-deftest systemd-daemon-reload-uses-command-fn-test ()
+  (let ((daemons-systemctl-command-fn
+         (lambda (command service) (format "my-systemctl %s %s" command service))))
+    (should (equal "my-systemctl daemon-reload"
+                   (daemons-systemd--daemon-reload-cmd "foo")))))

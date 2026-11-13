@@ -375,10 +375,22 @@ through an override instead (see `daemons-systemd--edit-file')."
 
 (defun daemons-systemd--edit-prefix ()
   "Return the TRAMP prefix for the files of units in the current scope.
-That of a remote `default-directory'; locally none for a user unit, and
-\"/sudo::\" for a system unit, whose files belong to root."
-  (or (file-remote-p default-directory)
-      (if daemons-systemd-is-user "" "/sudo::")))
+On a remote host that of `default-directory': for a system unit it must
+be a privileged one, such as /ssh:host|sudo:host:.  Locally none for a
+user unit, also with `daemons-always-sudo', and \"/sudo::\" for a system
+unit, whose files belong to root."
+  (if (daemons-systemd--remote-host-p)
+      (file-remote-p default-directory)
+    (if daemons-systemd-is-user "" "/sudo::")))
+
+(defun daemons-systemd--config-home ()
+  "Return $XDG_CONFIG_HOME as a directory, or ~/.config/ if unset.
+An empty or relative value counts as unset, as it does for systemd."
+  (let ((home (getenv "XDG_CONFIG_HOME")))
+    (file-name-as-directory
+     (if (and home (file-name-absolute-p home) (string-prefix-p "/" home))
+         home
+       "~/.config"))))
 
 (defun daemons-systemd--override-directory (prefix)
   "Return the directory for overrides of units in the current scope.
@@ -387,11 +399,10 @@ unit this is systemd/user in $XDG_CONFIG_HOME, which defaults to
 ~/.config; on a remote host always ~/.config."
   (concat prefix
           (if daemons-systemd-is-user
-              (file-name-as-directory
-               (concat (or (and (not (file-remote-p prefix))
-                                (getenv "XDG_CONFIG_HOME"))
-                           "~/.config")
-                       "/systemd/user"))
+              (concat (if (file-remote-p prefix)
+                          "~/.config/"
+                        (daemons-systemd--config-home))
+                      "systemd/user/")
             "/etc/systemd/system/")))
 
 (defun daemons-systemd--vendor-file-p (file)
@@ -399,31 +410,42 @@ unit this is systemd/user in $XDG_CONFIG_HOME, which defaults to
   (seq-some (lambda (dir) (string-prefix-p dir file))
             daemons-systemd-vendor-directories))
 
+(defun daemons-systemd--template-p (unit)
+  "Return non-nil if UNIT is a template, such as getty@.service."
+  (string-match-p "@\\.[a-z]+\\'" unit))
+
 (defun daemons-systemd--edit-file (name)
   "Return the file to edit for the systemd unit NAME.
-That is the unit's own file if it is writable and not a vendor file
-\(see `daemons-systemd-vendor-directories'), otherwise the override that
-`systemctl edit' would create, UNIT.d/override.conf.  A unit that is
-masked or not found has nothing to edit."
+That is the unit's own file if it is writable, not a vendor file (see
+`daemons-systemd-vendor-directories') and named after the unit,
+otherwise the override that `systemctl edit' would create,
+UNIT.d/override.conf.  So an instance such as foo@bar.service gets its
+own override, not its template's file, which all instances share, and an
+alias gets one too.  A template gets an override for all its instances.
+A unit that is masked or not found has nothing to edit."
   (let* ((unit (daemons-systemd--unit-name name))
-         (properties (daemons-systemd--show-properties
-                      (daemons--shell-command-to-string
-                       (funcall daemons-systemctl-command-fn
-                                "show -p LoadState -p FragmentPath"
-                                (shell-quote-argument unit)))))
-         (load (cdr (assoc "LoadState" properties)))
-         (fragment (or (cdr (assoc "FragmentPath" properties)) ""))
-         (prefix (daemons-systemd--edit-prefix)))
-    (pcase load
-      ('nil (error "Unexpected output from systemctl show %s: %S" unit properties))
-      ("not-found" (user-error "No such unit: %s" unit))
-      ("masked" (user-error "%s is masked; unmask it first" unit)))
-    (if (and (string-prefix-p "/" fragment)
-             (not (daemons-systemd--vendor-file-p fragment))
-             (file-writable-p (concat prefix fragment)))
-        (concat prefix fragment)
-      (concat (daemons-systemd--override-directory prefix)
-              unit ".d/override.conf"))))
+         (prefix (daemons-systemd--edit-prefix))
+         (override (concat (daemons-systemd--override-directory prefix)
+                           unit ".d/override.conf")))
+    (if (daemons-systemd--template-p unit)
+        ;; systemctl show does not accept a template.
+        override
+      (let* ((properties (daemons-systemd--show-properties
+                          (daemons--shell-command-to-string
+                           (funcall daemons-systemctl-command-fn
+                                    "show -p LoadState -p FragmentPath" unit))))
+             (load (cdr (assoc "LoadState" properties)))
+             (fragment (or (cdr (assoc "FragmentPath" properties)) "")))
+        (pcase load
+          ('nil (error "Unexpected output from systemctl show %s: %S" unit properties))
+          ("not-found" (user-error "No such unit: %s" unit))
+          ("masked" (user-error "%s is masked; unmask it first" unit)))
+        (if (and (string-prefix-p "/" fragment)
+                 (equal unit (file-name-nondirectory fragment))
+                 (not (daemons-systemd--vendor-file-p fragment))
+                 (file-writable-p (concat prefix fragment)))
+            (concat prefix fragment)
+          override)))))
 
 (defun daemons-systemd--edit-setup (_name)
   "Switch the current buffer to `systemd-mode' if that is installed."
@@ -431,8 +453,9 @@ masked or not found has nothing to edit."
     (systemd-mode)))
 
 (defun daemons-systemd--daemon-reload-cmd (_name)
-  "Return the command that makes systemd reload its unit files."
-  (concat (daemons-systemd--cmd) " daemon-reload"))
+  "Return the command that makes systemd reload its unit files.
+It is built by `daemons-systemctl-command-fn', as the other commands are."
+  (string-trim (funcall daemons-systemctl-command-fn "daemon-reload" "")))
 
 (daemons-define-submodule daemons-systemd
   "Daemons submodule for systemd."
