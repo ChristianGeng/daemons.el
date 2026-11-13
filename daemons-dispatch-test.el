@@ -90,7 +90,8 @@
                         ("R" . daemons-dispatch--restart) ("r" . daemons-dispatch--reload)
                         ("e" . daemons-dispatch--enable) ("d" . daemons-dispatch--disable)
                         ("i" . daemons-dispatch--status) ("j" . daemons-dispatch--journal)
-                        ("E" . daemons-dispatch--edit)))
+                        ("E" . daemons-dispatch--edit)
+                        ("c" . daemons-dispatch--edit-config)))
       (should (member expected keys)))))
 
 (ert-deftest daemons-ret-opens-dispatch-or-status-test ()
@@ -103,3 +104,11 @@
       (let ((daemons-dispatch-on-ret nil))
         (daemons-dispatch-or-status-at-point "foo"))
       (should (equal '((status "foo") (menu "foo")) calls)))))
+
+(ert-deftest daemons-dispatch-config-entry-only-when-mapped-test ()
+  (let ((suffix (get 'daemons-dispatch--edit-config 'transient--suffix))
+        (daemons--dispatch-name "rygel"))
+    (let ((daemons-config-files nil))
+      (should-not (funcall (oref suffix if))))
+    (let ((daemons-config-files '(("rygel" . "~/.config/rygel.conf"))))
+      (should (funcall (oref suffix if))))))

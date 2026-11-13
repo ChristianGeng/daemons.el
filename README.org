@@ -59,6 +59,13 @@ To change a unit, =M-x daemons-edit= (or =daemons-edit-at-point=) opens its file
 
 =RET= in the list opens a menu for the unit at point, =M-x daemons-dispatch= the same menu for a unit you name. Its header is the unit's one-line status; it offers every action the init system supports, with the list's keys (=s= start, =S= stop, =R= restart, =r= reload, =e= enable, =d= disable, =i= status, =j= journal, =E= unit file). Control actions keep the menu open and redraw the header with the new state. The menu needs ~transient~, built into Emacs 28 and later; without it, or with =daemons-dispatch-on-ret= set to nil, =RET= shows the status as before.
 
+Some services keep their configuration outside the unit file, e.g. =rygel= in =~/.config/rygel.conf=. List them in =daemons-config-files= and =M-x daemons-edit-config= (or =daemons-edit-config-at-point=, or =c= in the menu) opens that file; when it is missing it is first copied from a seed such as a system default, and after saving you are offered to restart the service:
+
+#+begin_src emacs-lisp
+(setq daemons-config-files
+      '(("rygel" "~/.config/rygel.conf" "/etc/rygel.conf")))
+#+end_src
+
 It looks something like this for systemd:
 
 [[./img/daemons-systemd-demo.png]]

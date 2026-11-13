@@ -85,6 +85,18 @@ otherwise, and when this is nil, `RET' shows the daemon's status."
   :type 'boolean
   :group 'daemons)
 
+(defcustom daemons-config-files nil
+  "The configuration files of daemons, for `daemons-edit-config'.
+Each entry is (NAME . FILE), or (NAME FILE SEED): when FILE does not
+exist, `daemons-edit-config' first copies SEED, e.g. a system default,
+to it.  NAME is the daemon's name as the list shows it, e.g. \"rygel\".
+FILE and SEED may be TRAMP file names."
+  :type '(repeat (cons (string :tag "Daemon")
+                       (choice (file :tag "Config file")
+                               (list (file :tag "Config file")
+                                     (file :tag "Copy from if missing")))))
+  :group 'daemons)
+
 (defcustom daemons-show-output-in-minibuffer nil
   "If non-nil, all output will be shown in the minibuffer."
   :type 'boolean
@@ -476,6 +488,53 @@ if needed, then runs the submodule's follow-up, for systemd
       (add-hook 'after-save-hook #'daemons--edit-saved nil t))
     (pop-to-buffer-same-window buffer)
     buffer))
+
+;; edit config
+(defvar-local daemons--edit-config-daemon nil
+  "The daemon whose configuration the current buffer edits.")
+
+(defun daemons--config-entry (name)
+  "Return (FILE SEED) for the daemon NAME from `daemons-config-files', or nil.
+SEED is nil when the entry has none."
+  (let ((entry (cdr (assoc name daemons-config-files))))
+    (cond ((null entry) nil)
+          ((stringp entry) (list entry nil))
+          (t (list (car entry) (cadr entry))))))
+
+(defun daemons--edit-config-offer-restart ()
+  "Offer to restart the daemon whose configuration was just saved."
+  (when (and daemons--edit-config-daemon
+             (y-or-n-p (format "Restart %s? " daemons--edit-config-daemon)))
+    (daemons-restart daemons--edit-config-daemon)))
+
+;;;###autoload
+(defun daemons-edit-config (name)
+  "Edit the configuration file of the daemon NAME and return its buffer.
+The file comes from `daemons-config-files'; when it is missing and the
+entry names a seed file, the seed is copied to it first.  After saving,
+you are offered to restart the daemon."
+  (interactive (list (daemons--completing-read)))
+  (pcase-let ((`(,file ,seed) (or (daemons--config-entry name)
+                                  (user-error "No configuration file for %s in `daemons-config-files'"
+                                              name))))
+    (setq file (expand-file-name file))
+    (when (and seed (not (file-exists-p file)))
+      (if (file-readable-p seed)
+          (progn (make-directory (file-name-directory file) t)
+                 (copy-file seed file)
+                 (message "Copied %s to %s" seed file))
+        (message "%s is missing and so is %s to copy it from" file seed)))
+    (let ((buffer (find-file-noselect file)))
+      (with-current-buffer buffer
+        (setq daemons--edit-config-daemon name)
+        (add-hook 'after-save-hook #'daemons--edit-config-offer-restart nil t))
+      (pop-to-buffer-same-window buffer)
+      buffer)))
+
+(defun daemons-edit-config-at-point (name)
+  "Edit the configuration file of the daemon NAME at point."
+  (interactive (list (daemons--daemon-at-point)))
+  (daemons-edit-config name))
 
 ;; journal
 (defvar-local daemons--journal-sudo-directory nil
