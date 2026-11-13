@@ -534,9 +534,32 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
   "Local sudo directories are this host; ssh, also to localhost, is not."
   (should-not (daemons--machine "/tmp/"))
   (should-not (daemons--machine "/sudo::/tmp/"))
-  (should (equal "/ssh:me@localhost#2222:" (daemons--machine "/ssh:me@localhost#2222:/tmp/")))
-  ;; Multi-hop: another machine, whatever part of the prefix TRAMP returns.
-  (should (daemons--machine "/ssh:h|sudo:h:/tmp/")))
+  (should-not (daemons--machine "/sudo:root@localhost:/tmp/"))
+  (should (equal "localhost#2222" (daemons--machine "/ssh:me@localhost#2222:/tmp/")))
+  (should-not (equal (daemons--machine "/ssh:me@localhost#2222:/tmp/")
+                     (daemons--machine "/ssh:me@localhost#2223:/tmp/")))
+  ;; The same machine with and without a sudo hop.
+  (should (equal "host" (daemons--machine "/ssh:me@host:/tmp/")))
+  (should (equal "host" (daemons--machine "/ssh:me@host|sudo:host:/tmp/"))))
+
+(ert-deftest daemons-start-silent-failure-test ()
+  "A command that fails without output says so, without a status line."
+  (daemons-test--with-state
+    (cl-letf (((symbol-function 'daemons-init-system-submodule)
+               (lambda () 'daemons-state-no-status-line-test))
+              ((symbol-function 'process-file-shell-command) (lambda (&rest _) 1)))
+      (daemons-stop "foo"))
+    (should (equal '("`stop' on `foo' failed (exit 1)") messages))))
+
+(ert-deftest daemons-start-status-error-keeps-output-test ()
+  "If the status line fails, the command's own output is still shown."
+  (daemons-test--with-state
+    (let ((daemons-test--start-output "Failed to connect to bus"))
+      (cl-letf (((symbol-function 'daemons--status-line-string)
+                 (lambda (_fn _name) (error "Unexpected output from systemctl show"))))
+        (daemons-start "foo")))
+    (should (equal '("Failed to connect to bus\nfoo: Unexpected output from systemctl show")
+                   messages))))
 
 (ert-deftest daemons-start-echoes-one-line-output-test ()
   "One line of output, such as an error, is echoed before the state."

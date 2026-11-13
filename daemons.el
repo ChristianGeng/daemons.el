@@ -236,25 +236,39 @@ active."
 
 (defun daemons--run-and-echo (command daemon-name)
   "Run COMMAND on DAEMON-NAME and say in the echo area what happened.
-See `daemons-command-output'.  Return the message."
-  (let* ((output (with-temp-buffer
+See `daemons-command-output'.  The command's output comes first, then
+the daemon's one-line status; a failure to get that status is shown in
+its place.  Return the message."
+  (let* ((exit nil)
+         (output (with-temp-buffer
                    (let ((dir default-directory))
                      (when daemons-always-sudo (daemons--sudo))
                      (unwind-protect
-                         (progn (daemons--run command daemon-name)
-                                (string-trim (buffer-string)))
+                         (let ((fun (or (daemons--command command (daemons-init-system-submodule))
+                                        (error "No such daemon command: %s" command))))
+                           ;; Unlike `shell-command', this returns the exit status.
+                           (setq exit (process-file-shell-command
+                                       (funcall fun daemon-name) nil t))
+                           (string-trim (buffer-string)))
                        (unless (equal dir default-directory)
                          (delete-directory (or (file-remote-p default-directory 'localname)
                                                default-directory)))))))
+         (failed (and (integerp exit) (/= exit 0)))
          (status-line (daemons--command 'status-line (daemons-init-system-submodule))))
     (if (string-match-p "\n" output)
         (progn (daemons--show-output command daemon-name output) nil)
       (let ((text (string-join
-                   (delq nil (list (unless (string-empty-p output) output)
-                                   (if status-line
-                                       (daemons--status-line-string status-line daemon-name)
-                                     (when (string-empty-p output)
-                                       (format "Ran `%s' on `%s'" command daemon-name)))))
+                   (delq nil
+                         (list (unless (string-empty-p output) output)
+                               (when (and failed (string-empty-p output))
+                                 (format "`%s' on `%s' failed (exit %d)" command daemon-name exit))
+                               (cond (status-line
+                                      (condition-case err
+                                          (daemons--status-line-string status-line daemon-name)
+                                        (error (format "%s: %s" daemon-name
+                                                       (error-message-string err)))))
+                                     ((and (string-empty-p output) (not failed))
+                                      (format "Ran `%s' on `%s'" command daemon-name)))))
                    "\n")))
         (message "%s" text)
         text))))
@@ -272,15 +286,18 @@ See `daemons-command-output'.  Return the message."
     (daemons--switch-output-buffer-create hostname)))
 
 (defun daemons--machine (dir)
-  "Return the machine DIR is on: its TRAMP prefix, or nil on this host.
-A local /sudo:: directory, as from `daemons-always-sudo', is this host;
-an ssh connection, also to localhost on some port, is another machine."
-  (let ((prefix (file-remote-p dir)))
-    (unless (or (null prefix)
-                (and (string-match-p "\\`/\\(?:sudo\\|doas\\|su\\):[^:|]*:\\'" prefix)
-                     (member (file-remote-p dir 'host)
-                             (list (system-name) "localhost" ""))))
-      prefix)))
+  "Return the machine DIR is on, or nil for this host.
+That is the host and port of the first TRAMP hop, so /ssh:me@host: and
+/ssh:me@host|sudo:host: are the same machine, and ssh tunnels to
+localhost on different ports are different ones.  A local sudo
+directory, as from `daemons-always-sudo', is this host."
+  (when (and (file-remote-p dir)
+             (string-match "\\`/\\([^:|/]+\\):\\(?:[^@:|]*@\\)?\\([^:|]*\\)[:|]" dir))
+    (let ((method (match-string 1 dir))
+          (host (match-string 2 dir)))
+      (unless (and (member method '("sudo" "doas" "su"))
+                   (member host (list (system-name) "localhost" "")))
+        host))))
 
 (defun daemons--refresh-list-buffer ()
   "Re-read the lists of daemons on this machine shown in buffers.
