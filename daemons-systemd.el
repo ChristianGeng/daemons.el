@@ -31,7 +31,8 @@
   "Function used to return string systemctl commands suitable for `shell-command'.
 
 It should take two string input arguments, denoting the desired systemctl
-command, and the service to run the command with.
+command, and the service to run the command with.  The service is passed
+unquoted: quote it with `shell-quote-argument'.
 
 The default value for this user option will respect the value of
 `daemons-systemd-is-user'.  In order to also do this for any custom value of
@@ -121,7 +122,8 @@ this option, see the implementation of `daemons-systemd--cmd'."
 (defun daemons--systemd-documentation-for (service)
   "Return documentation for SERVICE."
   (let* ((output (shell-command-to-string
-                  (format "systemctl show %s --no-pager" service)))
+                  (format "systemctl show %s --no-pager"
+                          (shell-quote-argument service))))
          (lines (split-string output "\n"))
          (prefix "Description=")
          (desc (seq-find (lambda (s) (string-prefix-p prefix s)) lines)))
@@ -144,8 +146,14 @@ this option, see the implementation of `daemons-systemd--cmd'."
 COMMAND should be a valid systemctl command, and SERVICE an existing systemd
 service.  Both should be strings.
 
-\"--user\" will be appended to the systemctl call if `daemons-systemd-is-user' is set."
-  (format "%s %s %s" (daemons-systemd--cmd) command service))
+\"--user\" will be appended to the systemctl call if `daemons-systemd-is-user' is set.
+SERVICE is shell-quoted, so that a name with shell syntax stays one
+argument; an empty SERVICE, as for daemon-reload, is left out.  A custom
+`daemons-systemctl-command-fn' gets SERVICE unquoted and must quote it
+itself."
+  (if (string-empty-p service)
+      (format "%s %s" (daemons-systemd--cmd) command)
+    (format "%s %s %s" (daemons-systemd--cmd) command (shell-quote-argument service))))
 
 (defconst daemons-systemd--colour-vars "SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0"
   "Environment that makes systemctl colour its output.")

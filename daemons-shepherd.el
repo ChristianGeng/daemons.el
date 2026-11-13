@@ -28,12 +28,12 @@
   :test (and (eq system-type 'gnu/linux)
              (executable-find "herd"))
   :commands
-  '((status . (lambda (name) (format "herd status %s" name)))
-    (start . (lambda (name) (format "herd start %s" name)))
-    (stop . (lambda (name) (format "herd stop %s" name)))
-    (restart . (lambda (name) (format "herd restart %s" name)))
-    (enable . (lambda (name) (format "herd enable %s" name)))
-    (disable . (lambda (name) (format "herd disable %s" name))))
+  '((status . (lambda (name) (format "herd status %s" (shell-quote-argument name))))
+    (start . (lambda (name) (format "herd start %s" (shell-quote-argument name))))
+    (stop . (lambda (name) (format "herd stop %s" (shell-quote-argument name))))
+    (restart . (lambda (name) (format "herd restart %s" (shell-quote-argument name))))
+    (enable . (lambda (name) (format "herd enable %s" (shell-quote-argument name))))
+    (disable . (lambda (name) (format "herd disable %s" (shell-quote-argument name)))))
 
   :list (daemons-shepherd--list)
 

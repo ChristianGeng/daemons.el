@@ -29,10 +29,10 @@
   :test (and (eq system-type 'gnu/linux)
              (executable-find "rc-service"))
   :commands
-  '((status . (lambda (name) (format "rc-service %s status" name)))
-    (start . (lambda (name) (format "rc-service %s start" name)))
-    (stop . (lambda (name) (format "rc-service %s stop" name)))
-    (restart . (lambda (name) (format "rc-service %s restart" name))))
+  '((status . (lambda (name) (format "rc-service %s status" (shell-quote-argument name))))
+    (start . (lambda (name) (format "rc-service %s start" (shell-quote-argument name))))
+    (stop . (lambda (name) (format "rc-service %s stop" (shell-quote-argument name))))
+    (restart . (lambda (name) (format "rc-service %s restart" (shell-quote-argument name)))))
 
   :list (daemons-openrc--list)
 

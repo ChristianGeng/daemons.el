@@ -30,10 +30,10 @@
              (executable-find "brew"))
 
   :commands
-  '((status . (lambda (name) (format "brew services list %s" name)))
-    (start . (lambda (name) (format "brew services start %s" name)))
-    (stop . (lambda (name) (format "brew services stop %s" name)))
-    (restart . (lambda (name) (format "brew services restart %s" name))))
+  '((status . (lambda (name) (format "brew services list %s" (shell-quote-argument name))))
+    (start . (lambda (name) (format "brew services start %s" (shell-quote-argument name))))
+    (stop . (lambda (name) (format "brew services stop %s" (shell-quote-argument name))))
+    (restart . (lambda (name) (format "brew services restart %s" (shell-quote-argument name)))))
 
   :list (daemons-brew--list)
 
