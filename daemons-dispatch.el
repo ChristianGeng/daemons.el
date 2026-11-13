@@ -21,9 +21,15 @@
 (defvar daemons--dispatch-name nil
   "The daemon the menu of `daemons-dispatch' is for.")
 
+(defvar daemons--dispatch-submodule nil
+  "The init system submodule of the menu, found once when it opens.
+Finding it runs the submodules' tests, which on a remote host each
+cost a round trip.")
+
 (defun daemons--dispatch-supported-p (command)
   "Return non-nil if the init system has COMMAND, e.g. \\='journal."
-  (daemons--command command (daemons-init-system-submodule)))
+  (daemons--command command (or daemons--dispatch-submodule
+                                (daemons-init-system-submodule))))
 
 (defun daemons--dispatch-header ()
   "Return the header of the menu: the daemon's one-line status, if any.
@@ -31,13 +37,13 @@ It is computed each time the menu is drawn, so after a start or stop the
 menu shows the new state."
   (let ((status-line (daemons--dispatch-supported-p 'status-line))
         (name daemons--dispatch-name))
-    (propertize
-     (if status-line
-         (condition-case err
-             (with-temp-buffer (funcall status-line name))
-           (error (format "%s: %s" name (error-message-string err))))
-       name)
-     'face 'transient-heading)))
+    ;; Not propertized: that would hide the status line's own colours,
+    ;; and transient gives a plain description its heading face.
+    (if status-line
+        (condition-case err
+            (with-temp-buffer (funcall status-line name))
+          (error (format "%s: %s" name (error-message-string err))))
+      name)))
 
 (defmacro daemons--define-dispatch-suffix (command function &optional stay)
   "Define the menu command for COMMAND that calls FUNCTION on the daemon.
@@ -57,7 +63,13 @@ With STAY the menu stays open, and its header is redrawn."
 (daemons--define-dispatch-suffix enable daemons-enable t)
 (daemons--define-dispatch-suffix disable daemons-disable t)
 (daemons--define-dispatch-suffix status daemons-status)
-(daemons--define-dispatch-suffix journal daemons-journal)
+(transient-define-suffix daemons-dispatch--journal ()
+  "Call `daemons-journal' on the daemon of the menu."
+  ;; `daemons-journal-function' works also without a journal command.
+  :if (lambda () (or daemons-journal-function
+                     (daemons--dispatch-supported-p 'journal)))
+  (interactive)
+  (daemons-journal daemons--dispatch-name))
 (daemons--define-dispatch-suffix edit daemons-edit)
 
 (transient-define-suffix daemons-dispatch--edit-config ()
@@ -90,7 +102,8 @@ Its header is the daemon's one-line status; it offers only the actions
 the init system supports, with the keys of the daemons list.  Control
 actions keep the menu open and redraw the header."
   (interactive (list (daemons--completing-read)))
-  (setq daemons--dispatch-name name)
+  (setq daemons--dispatch-name name
+        daemons--dispatch-submodule (daemons-init-system-submodule))
   (daemons-dispatch-menu))
 
 ;;;###autoload

@@ -503,6 +503,16 @@ In BODY, `dir' is that directory and `commands' the shell commands run."
         (save-buffer)))
     (should (member "Ran `reload foo': Failed." messages))))
 
+(ert-deftest daemons-edit-survives-mode-change-test ()
+  "Changing the major mode keeps the directory and follow-up hooks."
+  (daemons-test--with-edit
+    (with-current-buffer (daemons-edit "foo")
+      (fundamental-mode)
+      (insert "x=1\n")
+      (save-buffer))
+    (should (file-exists-p daemons-test--edit-file))
+    (should (member "Ran `reload foo'" messages))))
+
 (ert-deftest daemons-edit-at-point-test ()
   (daemons-test--with-edit
     (with-temp-buffer
