@@ -57,6 +57,8 @@ To watch a unit's journal as it grows, =M-x daemons-journal= (or =daemons-journa
 
 To change a unit, =M-x daemons-edit= (or =daemons-edit-at-point=) opens its file: the unit's own file when you can write it, e.g. under =~/.config/systemd/user/=, and for a packaged unit the override =systemctl edit= would create, =UNIT.d/override.conf=, so the vendor file under =/usr/lib/systemd= is never opened for writing. An instance such as =foo@bar= gets its own override rather than the template's file, which all instances share; a template such as =foo@.service= gets an override for all of them. System units are edited as root through =/sudo::=; on a remote host through its TRAMP directory, which for a system unit must be a privileged one such as =/ssh:host|sudo:host:=. Saving runs =systemctl daemon-reload= (with =--user= for user units) and the echo area says so. The buffer is in =systemd-mode= when that package is installed. This is ~systemd~ only; =daemons-systemd-vendor-directories= lists the directories that count as vendor files.
 
+=RET= in the list opens a menu for the unit at point, =M-x daemons-dispatch= the same menu for a unit you name. Its header is the unit's one-line status; it offers every action the init system supports, with the list's keys (=s= start, =S= stop, =R= restart, =r= reload, =e= enable, =d= disable, =i= status, =j= journal, =E= unit file). Control actions keep the menu open and redraw the header with the new state. The menu needs ~transient~, built into Emacs 28 and later; without it, or with =daemons-dispatch-on-ret= set to nil, =RET= shows the status as before.
+
 It looks something like this for systemd:
 
 [[./img/daemons-systemd-demo.png]]
