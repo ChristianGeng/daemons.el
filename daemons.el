@@ -181,10 +181,14 @@ the local user and host, which is root with `daemons-always-sudo'."
   (or (file-remote-p file 'localname) file))
 
 (defun daemons--local-sudo-p (dir)
-  "Return non-nil if DIR is a TRAMP directory on this host, e.g. /sudo::/tmp/.
-Such a directory, as `daemons-always-sudo' makes, names the local host."
-  (and (file-remote-p dir)
-       (member (file-remote-p dir 'host) (list (system-name) "localhost" ""))))
+  "Return non-nil if DIR is a sudo directory on this host, e.g. /sudo::/tmp/.
+Such a directory, as `daemons-always-sudo' makes, names the local host.
+Only a single sudo, doas or su hop counts: an ssh connection, also to
+localhost on some port, is another machine."
+  (let ((prefix (file-remote-p dir)))
+    (and prefix
+         (string-match-p "\\`/\\(?:sudo\\|doas\\|su\\):[^:|]*:\\'" prefix)
+         (member (file-remote-p dir 'host) (list (system-name) "localhost" "")))))
 
 (defun daemons--sudo-directory ()
   "Become root with `daemons--sudo' if `daemons-always-sudo' is set.
