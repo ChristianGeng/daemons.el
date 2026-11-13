@@ -16,7 +16,9 @@
 (defmacro daemons-dispatch-test--with-submodule (&rest body)
   "Run BODY with the dispatch test submodule and daemon commands recorded."
   (declare (indent 0))
-  `(let ((daemons-dispatch-test--calls nil))
+  `(let ((daemons-dispatch-test--calls nil)
+         (daemons--dispatch-submodule nil)
+         (daemons-journal-function nil))
      (cl-letf (((symbol-function 'daemons-init-system-submodule)
                 (lambda () 'daemons-dispatch-test))
                ((symbol-function 'daemons-start)
@@ -103,3 +105,41 @@
       (let ((daemons-dispatch-on-ret nil))
         (daemons-dispatch-or-status-at-point "foo"))
       (should (equal '((status "foo") (menu "foo")) calls)))))
+
+(ert-deftest daemons-dispatch-journal-with-custom-viewer-test ()
+  "j is offered with `daemons-journal-function' even without a journal command."
+  (daemons-dispatch-test--with-submodule
+    (let ((suffix (get 'daemons-dispatch--journal 'transient--suffix)))
+      (should-not (funcall (oref suffix if)))
+      (let ((daemons-journal-function #'ignore))
+        (should (funcall (oref suffix if)))))))
+
+(ert-deftest daemons-dispatch-header-keeps-status-colours-test ()
+  (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-dispatch-test))
+            ((symbol-function 'daemons--command)
+             (lambda (_command _submodule) (lambda (name) (propertize (concat name ": failed") 'face 'error)))))
+    (let ((daemons--dispatch-name "foo"))
+      (should (eq 'error (get-text-property 0 'face (daemons--dispatch-header)))))))
+
+(ert-deftest daemons-dispatch-finds-init-system-once-test ()
+  "Opening the menu finds the init system once, not once per entry."
+  (let ((found 0))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule)
+               (lambda () (cl-incf found) 'daemons-dispatch-test))
+              ((symbol-function 'daemons-dispatch-menu)
+               (lambda ()
+                 (dolist (command '(start stop status journal edit))
+                   (daemons--dispatch-supported-p command)))))
+      (daemons-dispatch "foo")
+      (should (= 1 found)))))
+
+(ert-deftest daemons-ret-without-transient-shows-status-test ()
+  "RET falls back to the status when daemons-dispatch cannot load."
+  (let ((calls nil))
+    (cl-letf (((symbol-function 'require)
+               (lambda (feature &rest _)
+                 (if (eq feature 'daemons-dispatch) (error "Cannot open load file: transient")
+                   feature)))
+              ((symbol-function 'daemons-status-at-point) (lambda (name) (push name calls))))
+      (daemons-dispatch-or-status-at-point "foo")
+      (should (equal '("foo") calls)))))

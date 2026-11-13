@@ -342,7 +342,9 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Open the menu for the daemon NAME at point, or show its status.
 See `daemons-dispatch-on-ret'."
   (interactive (list (daemons--daemon-at-point)))
-  (if (and daemons-dispatch-on-ret (require 'daemons-dispatch nil t))
+  (if (and daemons-dispatch-on-ret
+           ;; Also when daemons-dispatch.el is there but transient is not.
+           (condition-case nil (require 'daemons-dispatch) (error nil)))
       (daemons-dispatch name)
     (daemons-status-at-point name)))
 
