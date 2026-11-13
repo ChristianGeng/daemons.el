@@ -554,3 +554,54 @@ A printf stands in for journalctl."
                                (mapcar #'car (daemons-systemd-test--journal-faces))))
                 (should (string-suffix-p "-- journalctl finished --\n" (buffer-string)))))
           (kill-buffer buffer))))))
+
+(ert-deftest systemd-list-alias-shows-unit-state-test ()
+  "An alias shows the state of its unit, from one systemctl show call."
+  (let* ((daemons-systemd-color nil)
+         (commands nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd)
+            (push cmd commands)
+            (cond ((string-match-p "list-unit-files" cmd) "
+bluetooth.service          enabled
+dbus-org.bluez.service     alias
+chronyd.service            alias
+getty@.service             static
+autovt@.service            alias")
+                  ((string-match-p "list-units" cmd) "
+  bluetooth.service   loaded active running Bluetooth service
+  chrony.service      loaded failed failed  NTP")
+                  ((string-match-p " show -p Id " cmd)
+                   "Id=bluetooth.service\n\nId=chrony.service\n")
+                  (t (error "Unexpected command %s" cmd))))))
+    (should (equal '(("bluetooth" ["bluetooth" "enabled" "running"])
+                     ("dbus-org.bluez" ["dbus-org.bluez" "alias" "running"])
+                     ("chronyd" ["chronyd" "alias" "failed"]))
+                   (daemons-systemd--list)))
+    ;; Templates are not asked about: systemctl show rejects them.
+    (should (equal "systemctl show -p Id dbus-org.bluez.service chronyd.service"
+                   (seq-find (lambda (cmd) (string-match-p " show " cmd)) commands)))
+    (should (= 3 (length commands)))))
+
+(ert-deftest systemd-list-without-aliases-makes-no-show-call-test ()
+  (let* ((daemons-systemd-color nil)
+         (commands nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd) (push cmd commands)
+            (if (string-match-p "list-unit-files" cmd)
+                "foo.service enabled"
+              "  foo.service loaded active running Foo"))))
+    (daemons-systemd--list)
+    (should (= 2 (length commands)))))
+
+(ert-deftest systemd-list-alias-show-fails-test ()
+  "If systemctl show does not resolve the aliases, they show inactive."
+  (let* ((daemons-systemd-color nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd)
+            (cond ((string-match-p "list-unit-files" cmd) "dbus-org.bluez.service alias")
+                  ((string-match-p "list-units" cmd)
+                   "  bluetooth.service loaded active running Bluetooth")
+                  (t "Failed to connect to bus")))))
+    (should (equal '(("dbus-org.bluez" ["dbus-org.bluez" "alias" "inactive"]))
+                   (daemons-systemd--list)))))
