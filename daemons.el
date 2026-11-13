@@ -78,6 +78,17 @@ See `daemons-define-submodule' for how to implement your own."
   :type 'boolean
   :group 'daemons)
 
+(defcustom daemons-command-output 'echo
+  "Where start, stop, restart, reload, enable and disable show their result.
+With `echo', the echo area shows the daemon's one-line status afterwards
+(see `daemons-status-line'), after any one-line output of the command,
+such as an error; output of more than one line still goes to the output
+buffer.  With `buffer', the output buffer shows the output, as status
+does.  Either way the list of daemons is refreshed afterwards."
+  :type '(choice (const :tag "Echo area" echo)
+                 (const :tag "Output buffer" buffer))
+  :group 'daemons)
+
 (defcustom daemons-show-output-in-minibuffer nil
   "If non-nil, all output will be shown in the minibuffer."
   :type 'boolean
@@ -221,6 +232,61 @@ active."
       (daemons-output-mode))
     (daemons--switch-output-buffer-create hostname)))
 
+(defun daemons--run-and-echo (command daemon-name)
+  "Run COMMAND on DAEMON-NAME and say in the echo area what happened.
+See `daemons-command-output'.  Return the message."
+  (let* ((output (with-temp-buffer
+                   (let ((dir default-directory))
+                     (when daemons-always-sudo (daemons--sudo))
+                     (unwind-protect
+                         (progn (daemons--run command daemon-name)
+                                (string-trim (buffer-string)))
+                       (unless (equal dir default-directory)
+                         (delete-directory (file-local-name default-directory)))))))
+         (status-line (daemons--command 'status-line (daemons-init-system-submodule))))
+    (if (string-match-p "\n" output)
+        (progn (daemons--show-output command daemon-name output) nil)
+      (let ((text (string-join
+                   (delq nil (list (unless (string-empty-p output) output)
+                                   (if status-line
+                                       (daemons--status-line-string status-line daemon-name)
+                                     (when (string-empty-p output)
+                                       (format "Ran `%s' on `%s'" command daemon-name)))))
+                   "\n")))
+        (message "%s" text)
+        text))))
+
+(defun daemons--show-output (command daemon-name output)
+  "Show OUTPUT of COMMAND on DAEMON-NAME in the output buffer."
+  (let ((hostname (daemons--get-user-and-hostname default-directory)))
+    (with-current-buffer (get-buffer-create (daemons--get-output-buffer-name hostname))
+      (setq buffer-read-only nil
+            daemons--current-id daemon-name)
+      (delete-region (point-min) (point-max))
+      (daemons--insert-header (format "Output of `%s` on `%s` (%s):" command daemon-name hostname))
+      (insert output "\n")
+      (daemons-output-mode))
+    (daemons--switch-output-buffer-create hostname)))
+
+(defun daemons--refresh-list-buffer ()
+  "Re-read the list of daemons for this host, if it is shown in a buffer.
+Point stays on the same daemon."
+  (let ((buffer (get-buffer (daemons--get-list-buffer-name
+                             (daemons--get-user-and-hostname default-directory)))))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (when (derived-mode-p 'daemons-mode)
+          (revert-buffer))))))
+
+(defun daemons--run-changing-state (command daemon-name)
+  "Run COMMAND, which may change the state of DAEMON-NAME.
+Show the result as `daemons-command-output' says, then refresh the list."
+  (unwind-protect
+      (if (eq daemons-command-output 'buffer)
+          (daemons--run-with-output-buffer command daemon-name)
+        (daemons--run-and-echo command daemon-name))
+    (daemons--refresh-list-buffer)))
+
 (defun daemons--run (command daemon-name)
   "Run the given COMMAND on DAEMON-NAME.
 The results will be inserted into the current buffer."
@@ -334,32 +400,32 @@ e.g. /ssh:me@example.com|sudo:example.com:"
 (defun daemons-start-at-point (name)
   "Start the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'start name))
+  (daemons--run-changing-state 'start name))
 
 (defun daemons-stop-at-point (name)
   "Stop the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'stop name))
+  (daemons--run-changing-state 'stop name))
 
 (defun daemons-restart-at-point (name)
   "Restart the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'restart name))
+  (daemons--run-changing-state 'restart name))
 
 (defun daemons-reload-at-point (name)
   "Reload the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'reload name))
+  (daemons--run-changing-state 'reload name))
 
 (defun daemons-enable-at-point (name)
   "Enable the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'enable name))
+  (daemons--run-changing-state 'enable name))
 
 (defun daemons-disable-at-point (name)
   "Disable the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'disable name))
+  (daemons--run-changing-state 'disable name))
 
 (defun daemons--completing-read ()
   "Call `completing-read' with the current daemons list."
@@ -384,16 +450,20 @@ Signal a `user-error' if the submodule has none."
   "Show a one-line status of the daemon NAME in the echo area and return it."
   (interactive (progn (daemons--status-line-function)
                       (list (daemons--completing-read))))
-  (let* ((status-line (daemons--status-line-function))
-         (line (with-temp-buffer
-                 (let ((dir default-directory))
-                   (when daemons-always-sudo (daemons--sudo))
-                   (unwind-protect (funcall status-line name)
-                     ;; Remove the directory `daemons--sudo' made for this call.
-                     (unless (equal dir default-directory)
-                       (delete-directory (file-local-name default-directory))))))))
+  (let ((line (daemons--status-line-string (daemons--status-line-function) name)))
     (message "%s" line)
     line))
+
+(defun daemons--status-line-string (status-line name)
+  "Return the one-line status of daemon NAME from the function STATUS-LINE.
+With `daemons-always-sudo' it runs as root."
+  (with-temp-buffer
+    (let ((dir default-directory))
+      (when daemons-always-sudo (daemons--sudo))
+      (unwind-protect (funcall status-line name)
+        ;; Remove the directory `daemons--sudo' made for this call.
+        (unless (equal dir default-directory)
+          (delete-directory (file-local-name default-directory)))))))
 
 ;; journal
 (defvar-local daemons--journal-sudo-directory nil
@@ -475,37 +545,37 @@ viewer.  Return the buffer of the default viewer."
 (defun daemons-start (name)
   "Start the daemon NAME.  Show results in an output buffer."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'start name))
+  (daemons--run-changing-state 'start name))
 
 ;;;###autoload
 (defun daemons-stop (name)
   "Stop the daemon NAME.  Show results in an output buffer."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'stop name))
+  (daemons--run-changing-state 'stop name))
 
 ;;;###autoload
 (defun daemons-restart (name)
   "Restart the daemon NAME.  Show results in an ouptut buffer."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'restart name))
+  (daemons--run-changing-state 'restart name))
 
 ;;;###autoload
 (defun daemons-reload (name)
   "Reload the daemon NAME.  Show results in an output buffer."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'reload name))
+  (daemons--run-changing-state 'reload name))
 
 ;;;###autoload
 (defun daemons-enable (name)
   "Enable the daemon NAME.  Show results in an output buffer."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'enable name))
+  (daemons--run-changing-state 'enable name))
 
 ;;;###autoload
 (defun daemons-disable (name)
   "Disable the daemon NAME.  Show results in an output buffer."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'disable name))
+  (daemons--run-changing-state 'disable name))
 
 ;;;###autoload
 (defun daemons ()

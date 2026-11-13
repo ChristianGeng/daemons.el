@@ -444,6 +444,110 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
                (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
       (should-error (call-interactively #'daemons-journal) :type 'user-error))))
 
+;; state-changing command tests
+(defvar daemons-test--state nil
+  "The state of the daemon of the state test submodule.")
+
+(defvar daemons-test--start-output ""
+  "What starting a daemon of the state test submodule prints.")
+
+(daemons-define-submodule daemons-state-test
+  "Test: submodule whose commands change a daemon's state"
+  :test t
+  :commands '((start . (lambda (name) (setq daemons-test--state 'up)
+                         (format "printf %%s %s; true %s"
+                                 (shell-quote-argument daemons-test--start-output) name)))
+              (stop . (lambda (name) (setq daemons-test--state 'down) (format "true %s" name)))
+              (status-line . (lambda (name) (format "%s: %s" name daemons-test--state))))
+  :headers [("Daemon name" 20 t) ("State" 10 t)]
+  :list (list (list "foo" (vector "foo" (symbol-name daemons-test--state)))
+              (list "bar" (vector "bar" "-"))))
+
+(daemons-define-submodule daemons-state-no-status-line-test
+  "Test: submodule whose commands change state, without a status line"
+  :test t
+  :commands '((stop . (lambda (name) (format "true %s" name))))
+  :headers [("Daemon name" 20 t)]
+  :list nil)
+
+(defmacro daemons-test--with-state (&rest body)
+  "Run BODY with the state test submodule and its list buffer shown."
+  (declare (indent 0))
+  `(let ((daemons-test--state 'down)
+         (daemons-test--start-output "")
+         (daemons-command-output 'echo)
+         (daemons-always-sudo nil)
+         (default-directory "/tmp/"))
+     (daemons-test--with-submodule 'daemons-state-test
+       (let ((list-buffer (get-buffer-create
+                           (daemons--get-list-buffer-name
+                            (daemons--get-user-and-hostname default-directory)))))
+         (unwind-protect
+             (progn (with-current-buffer list-buffer
+                      (daemons-mode)
+                      (daemons--refresh-list)
+                      (tabulated-list-print t)
+                      (goto-char (point-min)))
+                    ,@body)
+           (kill-buffer list-buffer)
+           (let ((output (get-buffer (daemons--get-output-buffer-name
+                                      (daemons--get-user-and-hostname default-directory)))))
+             (when output (kill-buffer output))))))))
+
+(defun daemons-test--row-state (list-buffer id)
+  "Return the State column of row ID in LIST-BUFFER."
+  (with-current-buffer list-buffer
+    (aref (cadr (assoc id (funcall tabulated-list-entries))) 1)))
+
+(ert-deftest daemons-start-refreshes-list-and-echoes-test ()
+  "Starting from the list updates the row and echoes the new state, no window."
+  (daemons-test--with-state
+    (with-current-buffer list-buffer
+      (should (equal "foo" (tabulated-list-get-id)))
+      (should (string-match-p "foo +down" (buffer-string)))
+      (call-interactively #'daemons-start-at-point)
+      (should (string-match-p "foo +up" (buffer-string)))
+      (should (equal "foo" (tabulated-list-get-id))))
+    (should (equal '("foo: up") messages))
+    (should-not (get-buffer (daemons--get-output-buffer-name
+                             (daemons--get-user-and-hostname default-directory))))))
+
+(ert-deftest daemons-start-echoes-one-line-output-test ()
+  "One line of output, such as an error, is echoed before the state."
+  (daemons-test--with-state
+    (let ((daemons-test--start-output "Failed to start foo: Access denied"))
+      (daemons-start "foo"))
+    (should (equal '("Failed to start foo: Access denied\nfoo: up") messages))))
+
+(ert-deftest daemons-start-shows-long-output-in-buffer-test ()
+  "Output of more than one line goes to the output buffer."
+  (daemons-test--with-state
+    (let ((daemons-test--start-output "line one\nline two"))
+      (daemons-start "foo"))
+    (let ((output (get-buffer (daemons--get-output-buffer-name
+                               (daemons--get-user-and-hostname default-directory)))))
+      (should output)
+      (should (string-match-p "line one\nline two" (with-current-buffer output (buffer-string)))))
+    (with-current-buffer list-buffer
+      (should (string-match-p "foo +up" (buffer-string))))))
+
+(ert-deftest daemons-start-without-status-line-test ()
+  "Without a status line, the echo area says that the command ran."
+  (daemons-test--with-state
+    (cl-letf (((symbol-function 'daemons-init-system-submodule)
+               (lambda () 'daemons-state-no-status-line-test)))
+      (daemons-stop "foo"))
+    (should (equal '("Ran `stop' on `foo'") messages))))
+
+(ert-deftest daemons-command-output-buffer-test ()
+  "With `daemons-command-output' set to buffer, the output buffer is shown."
+  (daemons-test--with-state
+    (let ((daemons-command-output 'buffer))
+      (daemons-stop "foo"))
+    (should (get-buffer (daemons--get-output-buffer-name
+                         (daemons--get-user-and-hostname default-directory))))
+    (should (equal "down" (daemons-test--row-state list-buffer "foo")))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))
