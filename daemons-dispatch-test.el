@@ -167,3 +167,16 @@
   "RET in the output buffer shows the status again, not the menu."
   (should (eq 'daemons-status-at-point (lookup-key daemons-output-mode-map (kbd "RET"))))
   (should (eq 'daemons-dispatch-or-status-at-point (lookup-key daemons-mode-map (kbd "RET")))))
+
+(ert-deftest daemons-dispatch-header-does-not-probe-again-test ()
+  "Redrawing the header reuses the init system found when the menu opened."
+  (let ((found 0))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule)
+               (lambda () (cl-incf found) 'daemons-dispatch-test))
+              ((symbol-function 'message) #'ignore))
+      (let ((daemons--dispatch-name "foo")
+            (daemons--dispatch-submodule 'daemons-dispatch-test)
+            (daemons-always-sudo nil))
+        (should (equal "foo: up" (substring-no-properties (daemons--dispatch-header))))
+        (daemons--dispatch-header)
+        (should (= 0 found))))))
