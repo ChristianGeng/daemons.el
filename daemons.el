@@ -501,6 +501,8 @@ if needed, then runs the submodule's follow-up, for systemd
 ;; edit config
 (defvar-local daemons--edit-config-daemon nil
   "The daemon whose configuration the current buffer edits.")
+;; Kept, with its hook, when the buffer changes its major mode.
+(put 'daemons--edit-config-daemon 'permanent-local t)
 
 (defun daemons--config-entry (name)
   "Return (FILE SEED) for the daemon NAME from `daemons-config-files', or nil.
@@ -515,14 +517,21 @@ SEED is nil when the entry has none."
   (when (and daemons--edit-config-daemon
              (y-or-n-p (format "Restart %s? " daemons--edit-config-daemon)))
     (daemons-restart daemons--edit-config-daemon)))
+(put 'daemons--edit-config-offer-restart 'permanent-local-hook t)
 
 ;;;###autoload
 (defun daemons-edit-config (name)
   "Edit the configuration file of the daemon NAME and return its buffer.
 The file comes from `daemons-config-files'; when it is missing and the
-entry names a seed file, the seed is copied to it first.  After saving,
-you are offered to restart the daemon."
-  (interactive (list (daemons--completing-read)))
+entry names a seed file, the seed is copied to it first.  A missing
+file's directory is created on save.  After saving, you are offered to
+restart the daemon, on the host of the file: a local file name restarts
+the local daemon, also from the list of a remote host, so name such a
+config with its TRAMP prefix."
+  (interactive
+   (list (if daemons-config-files
+             (completing-read "Daemon: " (mapcar #'car daemons-config-files) nil t)
+           (user-error "No daemons in `daemons-config-files'"))))
   (pcase-let ((`(,file ,seed) (or (daemons--config-entry name)
                                   (user-error "No configuration file for %s in `daemons-config-files'"
                                               name))))
@@ -535,7 +544,10 @@ you are offered to restart the daemon."
         (message "%s is missing and so is %s to copy it from" file seed)))
     (let ((buffer (find-file-noselect file)))
       (with-current-buffer buffer
+        ;; A new file in a missing directory opens read-only.
+        (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))
         (setq daemons--edit-config-daemon name)
+        (add-hook 'before-save-hook #'daemons--edit-make-directory nil t)
         (add-hook 'after-save-hook #'daemons--edit-config-offer-restart nil t))
       (pop-to-buffer-same-window buffer)
       buffer)))

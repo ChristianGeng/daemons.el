@@ -575,6 +575,39 @@ In BODY, `dir' is that directory and `commands' the shell commands run."
       (with-current-buffer (daemons-edit-config "rygel")
         (should (equal "mine\n" (buffer-string)))))))
 
+(ert-deftest daemons-edit-config-new-file-in-new-directory-test ()
+  "An unseeded config in a missing directory is writable and saves."
+  (daemons-test--with-config
+    (let* ((file (concat dir "new/sub/rygel.conf"))
+           (daemons-config-files `(("rygel" . ,file))))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil)))
+        (with-current-buffer (daemons-edit-config "rygel")
+          (should-not buffer-read-only)
+          (insert "x=1\n")
+          (save-buffer)))
+      (should (file-exists-p file)))))
+
+(ert-deftest daemons-edit-config-survives-mode-change-test ()
+  (daemons-test--with-config
+    (let* ((file (concat dir "rygel.conf"))
+           (daemons-config-files `(("rygel" . ,file)))
+           (restarted nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                ((symbol-function 'daemons-restart) (lambda (name) (push name restarted))))
+        (with-current-buffer (daemons-edit-config "rygel")
+          (fundamental-mode)
+          (insert "x\n")
+          (save-buffer)))
+      (should (equal '("rygel") restarted)))))
+
+(ert-deftest daemons-edit-config-completes-mapped-daemons-test ()
+  (let ((daemons-config-files '(("rygel" . "/tmp/r.conf") ("foo" . "/tmp/f.conf")))
+        (offered nil))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _) (setq offered collection) "foo")))
+      (should (equal '("foo") (eval (cadr (interactive-form 'daemons-edit-config)))))
+      (should (equal '("rygel" "foo") offered)))))
+
 (ert-deftest daemons-edit-config-unmapped-test ()
   (let ((daemons-config-files nil))
     (should (equal (format-message "No configuration file for rygel in `daemons-config-files'")
