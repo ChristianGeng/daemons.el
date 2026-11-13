@@ -31,7 +31,8 @@
   "Function used to return string systemctl commands suitable for `shell-command'.
 
 It should take two string input arguments, denoting the desired systemctl
-command, and the service to run the command with.
+command, and the service to run the command with.  The command may be
+several words, such as \"show -p LoadState,ActiveState\".
 
 The default value for this user option will respect the value of
 `daemons-systemd-is-user'.  In order to also do this for any custom value of
