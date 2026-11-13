@@ -151,6 +151,10 @@ Override this to your own value for mocking out shell calls in tests.")
   "Return the buffer name for daemons output on HOSTNAME."
   (format "*daemons-output for %s*" hostname))
 
+(defun daemons--local-name (file)
+  "Return FILE without its TRAMP prefix, like `file-local-name' of Emacs 26."
+  (or (file-remote-p file 'localname) file))
+
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
 ARGS are passed to the underlying function."
@@ -356,7 +360,7 @@ Signal a `user-error' if the submodule has none."
                    (unwind-protect (funcall status-line name)
                      ;; Remove the directory `daemons--sudo' made for this call.
                      (unless (equal dir default-directory)
-                       (delete-directory (file-local-name default-directory))))))))
+                       (delete-directory (daemons--local-name default-directory))))))))
     (message "%s" line)
     line))
 
