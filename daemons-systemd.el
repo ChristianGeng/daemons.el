@@ -31,7 +31,8 @@
   "Function used to return string systemctl commands suitable for `shell-command'.
 
 It should take two string input arguments, denoting the desired systemctl
-command, and the service to run the command with.
+command, and the service to run the command with.  The service is empty
+for a command without one, such as daemon-reload; leave it out then.
 
 The default value for this user option will respect the value of
 `daemons-systemd-is-user'.  In order to also do this for any custom value of
@@ -430,10 +431,17 @@ A unit that is masked or not found has nothing to edit."
     (if (daemons-systemd--template-p unit)
         ;; systemctl show does not accept a template.
         override
-      (let* ((properties (daemons-systemd--show-properties
-                          (daemons--shell-command-to-string
-                           (funcall daemons-systemctl-command-fn
-                                    "show -p LoadState -p FragmentPath" unit))))
+      (let* ((properties
+              (daemons-systemd--show-properties
+               ;; A local user unit is the user's own, also when the list
+               ;; runs as root with `daemons-always-sudo'.
+               (let ((default-directory (if (and daemons-systemd-is-user
+                                                 (not (daemons-systemd--remote-host-p)))
+                                            (expand-file-name "~/")
+                                          default-directory)))
+                 (daemons--shell-command-to-string
+                  (funcall daemons-systemctl-command-fn
+                           "show -p LoadState -p FragmentPath" unit)))))
              (load (cdr (assoc "LoadState" properties)))
              (fragment (or (cdr (assoc "FragmentPath" properties)) "")))
         (pcase load

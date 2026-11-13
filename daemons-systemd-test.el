@@ -731,3 +731,15 @@ directory that is $XDG_CONFIG_HOME."
          (lambda (command service) (format "my-systemctl %s %s" command service))))
     (should (equal "my-systemctl daemon-reload"
                    (daemons-systemd--daemon-reload-cmd "foo")))))
+
+(ert-deftest systemd-edit-user-unit-looked-up-as-user-test ()
+  "With `daemons-always-sudo', a local user unit is looked up as the user, not root."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/sudo::/tmp/")
+        (dirs nil))
+    (daemons-systemd-test--with-show nil
+      (let ((daemons--shell-command-to-string-fun
+             (lambda (_) (push default-directory dirs)
+               "LoadState=loaded\nFragmentPath=/usr/lib/systemd/user/foo.service\n")))
+        (daemons-systemd--edit-file "foo")
+        (should (equal (list (expand-file-name "~/")) dirs))))))
