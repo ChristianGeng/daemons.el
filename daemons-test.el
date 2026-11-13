@@ -454,6 +454,25 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
         (should-error (daemons-journal "foo"))
         (should-not (get-buffer (daemons--get-journal-buffer-name "foo")))))))
 
+(ert-deftest daemons-status-line-removes-only-sudo-directory-test ()
+  "A status line that changes `default-directory' does not get it removed."
+  (let ((other (make-temp-file "daemons-other" t))
+        (daemons-always-sudo nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-cd-status-line-test))
+                  ((symbol-function 'message) #'ignore))
+          (daemons-define-submodule daemons-cd-status-line-test
+            "Test: status line that changes directory"
+            :test t
+            :commands `((status-line . (lambda (name)
+                                         (setq default-directory ,(file-name-as-directory other))
+                                         (concat name ": up"))))
+            :headers []
+            :list nil)
+          (should (equal "foo: up" (daemons-status-line "foo")))
+          (should (file-directory-p other)))
+      (when (file-directory-p other) (delete-directory other)))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))
