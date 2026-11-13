@@ -437,3 +437,16 @@ A local /sudo:: directory, as from `daemons-always-sudo', is not remote."
          (lambda (_) "LoadState=error\nActiveState=inactive\nSubState=dead\nUnitFileState=\nActiveEnterTimestamp=n/a\n")))
     (should (equal "foo.service: error, inactive (dead)"
                    (daemons-systemd--status-line "foo")))))
+
+(ert-deftest systemd-list-ignores-colour-escapes-test ()
+  "Output coloured by SYSTEMD_COLORS in the environment still parses."
+  (let* ((daemons-systemd-color nil)
+         (red (lambda (s) (concat "\e[0;1;31m" s "\e[0m")))
+         (daemons--shell-command-to-string-fun
+          (daemons-systemd-test--list-command-fun
+           (concat "auditd.service " "\e[0;1;32menabled\e[0m" "\n")
+           (concat (funcall red "●") (funcall red " ") (funcall red "auditd.service")
+                   (funcall red " ") "loaded " (funcall red "failed") (funcall red " ")
+                   (funcall red "failed") (funcall red " ") "Security Auditing Service\n"))))
+    (should (equal '(("auditd" ["auditd" "enabled" "failed"]))
+                   (daemons-systemd--list)))))
