@@ -150,21 +150,35 @@ service.  Both should be strings.
 (defconst daemons-systemd--colour-vars "SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0"
   "Environment that makes systemctl colour its output.")
 
+(defconst daemons-systemd--systemctl-command-regexp
+  (let ((word "[^ \t;&|()]+"))
+    (concat
+     ;; The start of a command: of the string, or after ; & | or (.
+     "\\(?:\\`\\|[;&|(]\\)[ \t]*"
+     ;; An optional sudo or doas with its options and their arguments.
+     "\\(?:\\(?:" word "/\\)?\\(?:sudo\\|doas\\)"
+     "\\(?:[ \t]+" word "\\)*?[ \t]+\\)?"
+     ;; systemctl itself, possibly with a directory, as a whole word.
+     "\\(\\(?:" word "/\\)?systemctl\\)\\(?:[ \t]\\|\\'\\)"))
+  "Regexp for a systemctl that runs as a command; group 1 is the systemctl.")
+
 (defun daemons-systemd--status-cmd (service)
   "Return the shell command that shows the status of SERVICE.
 With `daemons-systemd-color', systemctl is asked for colours so that
 `daemons-systemd--mark-journal-errors' can find journal lines of priority
-err and above.  The variables are set by `env' right before the systemctl
-word, so they survive a wrapper such as sudo, which drops the caller's
-environment.  A command without that word gets them exported first, which
-keeps shell builtins and compound commands working."
-  (let ((cmd (funcall daemons-systemctl-command-fn "status" service)))
+err and above.  The variables are set by `env' right before the first
+systemctl that runs as a command, so they survive a wrapper such as sudo,
+which drops the caller's environment.  A systemctl elsewhere, such as an
+argument of `test -x', is left alone.  A command without such a systemctl
+gets them exported first, which keeps shell builtins and compound
+commands working."
+  (let ((cmd (funcall daemons-systemctl-command-fn "status" service))
+        (case-fold-search nil))
     (cond ((not daemons-systemd-color) cmd)
-          ((string-match "\\(?:^\\|[ \t]\\)\\([^ \t]*/\\)?systemctl\\_>" cmd)
-           (let ((start (or (match-beginning 1)
-                            (- (match-end 0) (length "systemctl")))))
-             (concat (substring cmd 0 start) "env " daemons-systemd--colour-vars
-                     " " (substring cmd start))))
+          ((string-match daemons-systemd--systemctl-command-regexp cmd)
+           (concat (substring cmd 0 (match-beginning 1))
+                   "env " daemons-systemd--colour-vars " "
+                   (substring cmd (match-beginning 1))))
           (t (concat "export " daemons-systemd--colour-vars "; " cmd)))))
 
 (defconst daemons-systemd--status-font-lock-keywords

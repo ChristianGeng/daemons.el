@@ -95,9 +95,22 @@ Return the fontified buffer text and the command that was run."
                     ("my-status-wrapper foo"
                      . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; my-status-wrapper foo")
                     ("cd /tmp && my-status-wrapper foo"
-                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; cd /tmp && my-status-wrapper foo")))
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; cd /tmp && my-status-wrapper foo")
+                    ;; A systemctl that is only an argument is left alone.
+                    ("test -x /bin/systemctl && systemctl status foo"
+                     . "test -x /bin/systemctl && env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
+                    ("ls /etc/systemctl.d && systemctl status foo"
+                     . "ls /etc/systemctl.d && env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
+                    ("echo systemctl; systemctl status foo"
+                     . "echo systemctl; env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
+                    ("systemctl-wrapper foo"
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; systemctl-wrapper foo")))
       (let ((daemons-systemctl-command-fn (lambda (_command _service) (car case))))
-        (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))))))
+        (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))
+        ;; Independent of the syntax table of the buffer it runs in.
+        (with-temp-buffer
+          (special-mode)
+          (should (equal (cdr case) (daemons-systemd--status-cmd "foo"))))))))
 
 (ert-deftest systemd-status-colours-failed-unit-test ()
   (pcase-let ((`(,text ,command)
