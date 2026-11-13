@@ -558,6 +558,7 @@ A printf stands in for journalctl."
 (ert-deftest systemd-list-alias-shows-unit-state-test ()
   "An alias shows the state of its unit, from one systemctl show call."
   (let* ((daemons-systemd-color nil)
+         (daemons-systemd-is-user nil)
          (commands nil)
          (daemons--shell-command-to-string-fun
           (lambda (cmd)
@@ -585,6 +586,7 @@ autovt@.service            alias")
 
 (ert-deftest systemd-list-without-aliases-makes-no-show-call-test ()
   (let* ((daemons-systemd-color nil)
+         (daemons-systemd-is-user nil)
          (commands nil)
          (daemons--shell-command-to-string-fun
           (lambda (cmd) (push cmd commands)
@@ -604,4 +606,19 @@ autovt@.service            alias")
                    "  bluetooth.service loaded active running Bluetooth")
                   (t "Failed to connect to bus")))))
     (should (equal '(("dbus-org.bluez" ["dbus-org.bluez" "alias" "inactive"]))
+                   (daemons-systemd--list)))))
+
+(ert-deftest systemd-list-alias-show-stops-early-test ()
+  "Aliases before one systemctl show rejects are still resolved."
+  (let* ((daemons-systemd-color nil)
+         (daemons-systemd-is-user nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd)
+            (cond ((string-match-p "list-unit-files" cmd)
+                   "dbus-org.bluez.service alias\nweird.service alias")
+                  ((string-match-p "list-units" cmd)
+                   "  bluetooth.service loaded active running Bluetooth")
+                  (t "Id=bluetooth.service\nFailed to get properties: weird")))))
+    (should (equal '(("dbus-org.bluez" ["dbus-org.bluez" "alias" "running"])
+                     ("weird" ["weird" "alias" "inactive"]))
                    (daemons-systemd--list)))))

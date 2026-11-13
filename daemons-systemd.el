@@ -448,8 +448,10 @@ The keys are unit names such as \"foo.service\".  Return nil if
   "Return a hash table of the unit each of ALIASES is an alias of.
 ALIASES are unit names such as \"dbus-org.bluez.service\"; templates
 must not be among them, as `systemctl show' rejects those.  One
-`systemctl show -p Id' call resolves all of them.  Return nil if its
-output does not have one Id per alias."
+`systemctl show -p Id' call resolves all of them.  It prints the Ids in
+order and stops at a name it rejects, so the aliases before that one are
+still resolved.  systemd before 246 lists no unit file as an alias, so
+there this is not called."
   (let ((ids nil))
     (dolist (line (daemons--split-lines
                    (daemons--shell-command-to-string
@@ -457,11 +459,11 @@ output does not have one Id per alias."
                             (mapconcat #'shell-quote-argument aliases " ")))))
       (when (string-match "\\`Id=\\(.+\\)\\'" line)
         (push (match-string 1 line) ids)))
-    (when (= (length ids) (length aliases))
-      (let ((targets (make-hash-table :test 'equal)))
-        (seq-mapn (lambda (alias id) (puthash alias id targets))
-                  aliases (nreverse ids))
-        targets))))
+    (let ((targets (make-hash-table :test 'equal)))
+      ;; Stops at the shorter list: aliases without an Id stay unresolved.
+      (seq-mapn (lambda (alias id) (puthash alias id targets))
+                aliases (nreverse ids))
+      targets)))
 
 (defun daemons-systemd--list ()
   "Return a list of daemons on a systemd system.
