@@ -687,6 +687,11 @@ A printf stands in for journalctl."
                        (daemons--get-journal-buffer-name "foo"))
                      (let ((default-directory "/sudo::/tmp/abc/"))
                        (daemons--get-journal-buffer-name "foo"))))
+      ;; ssh tunnels to localhost on different ports are different machines.
+      (should-not (equal (let ((default-directory "/ssh:me@localhost#2222:/tmp/"))
+                           (daemons--get-journal-buffer-name "foo"))
+                         (let ((default-directory "/ssh:me@localhost#2223:/tmp/"))
+                           (daemons--get-journal-buffer-name "foo"))))
       ;; A remote host keeps its full TRAMP prefix.
       (should (string-match-p "for /ssh:host:\\*\\'"
                               (let ((default-directory "/ssh:host:/tmp/"))
