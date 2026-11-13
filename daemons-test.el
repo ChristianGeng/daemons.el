@@ -540,7 +540,14 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
                      (daemons--machine "/ssh:me@localhost#2223:/tmp/")))
   ;; The same machine with and without a sudo hop.
   (should (equal "host" (daemons--machine "/ssh:me@host:/tmp/")))
-  (should (equal "host" (daemons--machine "/ssh:me@host|sudo:host:/tmp/"))))
+  (should (equal "host" (daemons--machine "/ssh:me@host|sudo:host:/tmp/")))
+  (should (equal "localhost#2222"
+                 (daemons--machine "/ssh:me@localhost#2222|sudo:localhost:/tmp/")))
+  (should (equal "h" (daemons--machine "/ssh:host|sudo:h:/tmp/")))
+  ;; Through a gateway: the target, not the gateway.
+  (should (equal "target" (daemons--machine "/ssh:gw|ssh:target:/tmp/")))
+  (should-not (equal (daemons--machine "/ssh:gw|ssh:a:/tmp/")
+                     (daemons--machine "/ssh:gw|ssh:b:/tmp/"))))
 
 (ert-deftest daemons-start-silent-failure-test ()
   "A command that fails without output says so, without a status line."

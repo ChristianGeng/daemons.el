@@ -287,17 +287,27 @@ its place.  Return the message."
 
 (defun daemons--machine (dir)
   "Return the machine DIR is on, or nil for this host.
-That is the host and port of the first TRAMP hop, so /ssh:me@host: and
-/ssh:me@host|sudo:host: are the same machine, and ssh tunnels to
-localhost on different ports are different ones.  A local sudo
-directory, as from `daemons-always-sudo', is this host."
-  (when (and (file-remote-p dir)
-             (string-match "\\`/\\([^:|/]+\\):\\(?:[^@:|]*@\\)?\\([^:|]*\\)[:|]" dir))
-    (let ((method (match-string 1 dir))
-          (host (match-string 2 dir)))
-      (unless (and (member method '("sudo" "doas" "su"))
-                   (member host (list (system-name) "localhost" "")))
-        host))))
+That is the host and port of the last TRAMP hop, where commands run, so
+/ssh:gw|ssh:target: and /ssh:target: are the same machine and ssh
+tunnels to localhost on different ports are different ones.  A sudo,
+doas or su hop to the host of the hop before it, or to this host, does
+not change the machine, so /ssh:me@host|sudo:host: is host and a local
+sudo directory, as from `daemons-always-sudo', is this host."
+  (let ((localname (file-remote-p dir 'localname))
+        (local (list (system-name) "localhost" ""))
+        (machine nil))
+    (when localname
+      (dolist (hop (split-string (substring dir 1 (- (length dir) (length localname) 1))
+                                 "|"))
+        (when (string-match "\\`\\([^:]+\\):\\(?:[^@]*@\\)?\\(.*\\)\\'" hop)
+          (let ((method (match-string 1 hop))
+                (host (match-string 2 hop)))
+            (unless (and (member method '("sudo" "doas" "su"))
+                         (or (member host local)
+                             (and machine
+                                  (equal host (car (split-string machine "#"))))))
+              (setq machine host))))))
+    machine))
 
 (defun daemons--refresh-list-buffer ()
   "Re-read the lists of daemons on this machine shown in buffers.
