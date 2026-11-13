@@ -155,6 +155,14 @@ Override this to your own value for mocking out shell calls in tests.")
   "Return FILE without its TRAMP prefix, like `file-local-name' of Emacs 26."
   (or (file-remote-p file 'localname) file))
 
+(defun daemons--sudo-directory ()
+  "Become root with `daemons--sudo' if `daemons-always-sudo' is set.
+Return the directory it made, which the caller must remove, or nil."
+  (when daemons-always-sudo
+    (let ((dir default-directory))
+      (daemons--sudo)
+      (unless (equal dir default-directory) default-directory))))
+
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
 ARGS are passed to the underlying function."
@@ -355,12 +363,12 @@ Signal a `user-error' if the submodule has none."
                       (list (daemons--completing-read))))
   (let* ((status-line (daemons--status-line-function))
          (line (with-temp-buffer
-                 (let ((dir default-directory))
-                   (when daemons-always-sudo (daemons--sudo))
+                 (let ((sudo-directory (daemons--sudo-directory)))
                    (unwind-protect (funcall status-line name)
-                     ;; Remove the directory `daemons--sudo' made for this call.
-                     (unless (equal dir default-directory)
-                       (delete-directory (daemons--local-name default-directory))))))))
+                     ;; Remove only the directory `daemons--sudo' made for
+                     ;; this call, wherever STATUS-LINE left us.
+                     (when sudo-directory
+                       (delete-directory (daemons--local-name sudo-directory))))))))
     (message "%s" line)
     line))
 
