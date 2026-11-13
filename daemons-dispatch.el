@@ -41,7 +41,11 @@ menu shows the new state."
     ;; and transient gives a plain description its heading face.
     (if status-line
         (condition-case err
-            (with-temp-buffer (funcall status-line name))
+            ;; As `daemons-status-line' does it, as root with
+            ;; `daemons-always-sudo', but without its message.
+            (let ((inhibit-message t)
+                  (message-log-max nil))
+              (daemons-status-line name))
           (error (format "%s: %s" name (error-message-string err))))
       name)))
 

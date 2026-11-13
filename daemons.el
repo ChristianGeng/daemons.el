@@ -130,6 +130,8 @@ Override this to your own value for mocking out shell calls in tests.")
 (defvar daemons-output-mode-map
   (let ((map (copy-keymap daemons-mode-map)))
     (define-key map [remap revert-buffer] 'daemons-status-at-point)
+    ;; RET opens the menu only in the list; here it shows the status again.
+    (define-key map (kbd "RET") 'daemons-status-at-point)
     map)
   "Keymap for daemons output mode.")
 

@@ -143,3 +143,18 @@
               ((symbol-function 'daemons-status-at-point) (lambda (name) (push name calls))))
       (daemons-dispatch-or-status-at-point "foo")
       (should (equal '("foo") calls)))))
+
+(ert-deftest daemons-dispatch-header-runs-like-status-line-test ()
+  "The header comes from `daemons-status-line', so it runs as root with sudo."
+  (daemons-dispatch-test--with-submodule
+    (let ((daemons--dispatch-name "foo")
+          (called nil))
+      (cl-letf (((symbol-function 'daemons-status-line)
+                 (lambda (name) (setq called name) "foo: as root")))
+        (should (equal "foo: as root" (daemons--dispatch-header)))
+        (should (equal "foo" called))))))
+
+(ert-deftest daemons-output-ret-shows-status-test ()
+  "RET in the output buffer shows the status again, not the menu."
+  (should (eq 'daemons-status-at-point (lookup-key daemons-output-mode-map (kbd "RET"))))
+  (should (eq 'daemons-dispatch-or-status-at-point (lookup-key daemons-mode-map (kbd "RET")))))
