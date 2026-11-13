@@ -465,7 +465,9 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
                                      (substring cmd (1+ (string-match " " cmd)))))
                             "\n" t)))
                 (should (member (format "[%s]" name) words))
-                (should-not (member (format "[%s]" (getenv "HOME")) words))))))))))
+                (should-not (member (format "[%s]" (getenv "HOME")) words))
+                ;; Nor as output of its own, e.g. after "; echo".
+                (should-not (member (getenv "HOME") words))))))))))
 
 (ert-deftest daemons-systemctl-cmd-without-service-test ()
   "An empty service, as for daemon-reload, is left out rather than quoted."

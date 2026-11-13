@@ -151,7 +151,7 @@ SERVICE is shell-quoted, so that a name with shell syntax stays one
 argument; an empty SERVICE, as for daemon-reload, is left out.  A custom
 `daemons-systemctl-command-fn' gets SERVICE unquoted and must quote it
 itself."
-  (if (string-empty-p service)
+  (if (equal service "")
       (format "%s %s" (daemons-systemd--cmd) command)
     (format "%s %s %s" (daemons-systemd--cmd) command (shell-quote-argument service))))
 
