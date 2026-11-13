@@ -546,16 +546,23 @@ autovt@.service            alias")
   "The journal follows in an async process in `default-directory'."
   (let ((daemons-systemd-color nil)
         (daemons-systemd-is-user t)
-        (args nil))
-    (cl-letf (((symbol-function 'make-process)
-               (lambda (&rest plist) (setq args plist) 'process)))
+        (args nil)
+        (start-file-process (symbol-function 'start-file-process)))
+    (cl-letf (((symbol-function 'start-file-process)
+               (lambda (name buffer &rest command)
+                 (setq args (list buffer command process-connection-type))
+                 (funcall start-file-process name buffer "true"))))
       (with-temp-buffer
-        (should (eq 'process (daemons-systemd--journal "foo")))
-        (should (eq (current-buffer) (plist-get args :buffer)))
-        (should (equal '("journalctl" "--user" "--no-pager" "-f" "-u" "foo.service")
-                       (plist-get args :command)))
-        (should (plist-get args :file-handler))
-        (should (eq #'daemons-systemd--journal-filter (plist-get args :filter)))))))
+        (let ((process (daemons-systemd--journal "foo")))
+          (should (processp process))
+          (should (equal (list (current-buffer)
+                               '("journalctl" "--user" "--no-pager" "-f" "-u" "foo.service")
+                               nil)
+                         args))
+          (should (eq #'daemons-systemd--journal-filter (process-filter process)))
+          (should (eq #'daemons-systemd--journal-sentinel (process-sentinel process)))
+          (should-not (process-query-on-exit-flag process))
+          (delete-process process))))))
 
 (ert-deftest systemd-journal-is-a-command-test ()
   (should (eq 'daemons-systemd--journal (daemons--command 'journal 'daemons-systemd)))
@@ -649,16 +656,14 @@ A printf stands in for journalctl."
         (daemons-systemd-is-user t)
         (daemons-journal-function nil)
         (daemons-always-sudo nil)
-        (make-process (symbol-function 'make-process))
+        (start-file-process (symbol-function 'start-file-process))
         (commands nil))
     (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd))
-              ((symbol-function 'make-process)
-               (lambda (&rest plist)
-                 (push (plist-get plist :command) commands)
-                 (apply make-process
-                        (plist-put plist :command
-                                   (list "printf" "%s"
-                                         daemons-systemd-test--journal-output))))))
+              ((symbol-function 'start-file-process)
+               (lambda (name buffer &rest command)
+                 (push command commands)
+                 (funcall start-file-process name buffer
+                          "printf" "%s" daemons-systemd-test--journal-output))))
       (let* ((buffer (save-current-buffer (daemons-journal "foo")))
              (process (get-buffer-process buffer)))
         (unwind-protect
@@ -672,3 +677,17 @@ A printf stands in for journalctl."
                                (mapcar #'car (daemons-systemd-test--journal-faces))))
                 (should (string-suffix-p "-- journalctl finished --\n" (buffer-string)))))
           (kill-buffer buffer))))))
+
+(ert-deftest systemd-journal-buffer-name-from-sudo-directory-test ()
+  "With `daemons-always-sudo', a root journal has one buffer name, from wherever."
+  (let ((daemons-always-sudo t)
+        (daemons-systemd-is-user nil))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd)))
+      (should (equal (let ((default-directory "/tmp/"))
+                       (daemons--get-journal-buffer-name "foo"))
+                     (let ((default-directory "/sudo::/tmp/abc/"))
+                       (daemons--get-journal-buffer-name "foo"))))
+      ;; A remote host keeps its full TRAMP prefix.
+      (should (string-match-p "for /ssh:host:\\*\\'"
+                              (let ((default-directory "/ssh:host:/tmp/"))
+                                (daemons--get-journal-buffer-name "foo")))))))
