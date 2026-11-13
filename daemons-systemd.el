@@ -437,6 +437,16 @@ that is the normal state between runs."
         (propertize state 'font-lock-face face)
       state)))
 
+(defun daemons-systemd--list-output (command)
+  "Return the lines of the systemctl COMMAND for the list, without escapes.
+systemctl colours its output when SYSTEMD_COLORS is set in the
+environment, here or on a remote host, which would break the parsing."
+  (daemons--split-lines
+   (replace-regexp-in-string
+    daemons-systemd--escape-regexp ""
+    (daemons--shell-command-to-string
+     (format "%s %s" (daemons-systemd--cmd) command)))))
+
 (defun daemons-systemd--active-states ()
   "Return a hash table of the short active state of each loaded service.
 The keys are unit names such as \"foo.service\".  Return nil if
@@ -444,10 +454,8 @@ The keys are unit names such as \"foo.service\".  Return nil if
 \"Failed to connect to bus\": then the states are unknown."
   (let ((states (make-hash-table :test 'equal))
         (other-output nil))
-    (dolist (line (daemons--split-lines
-                   (daemons--shell-command-to-string
-                    (format "%s list-units --type=service --all --no-legend"
-                            (daemons-systemd--cmd)))))
+    (dolist (line (daemons-systemd--list-output
+                   "list-units --type=service --all --no-legend"))
       (let ((parts (split-string line)))
         ;; Failed and not-found units are marked with a bullet.
         (when (member (car parts) '("\u25cf" "*"))
@@ -465,9 +473,7 @@ Each item is (NAME [NAME ENABLED ACTIVE]).  Units that `systemctl
 list-units' does not report have never been loaded; they are inactive.
 If that call fails, ACTIVE is \"unknown\"."
   (let ((states (daemons-systemd--active-states)))
-    (thread-last  (format "%s list-unit-files --type=service --no-legend" (daemons-systemd--cmd))
-      (daemons--shell-command-to-string)
-      (daemons--split-lines)
+    (thread-last (daemons-systemd--list-output "list-unit-files --type=service --no-legend")
       (seq-map (lambda (line)
                  (let ((item (daemons-systemd--parse-list-item line))
                        (state (if states
