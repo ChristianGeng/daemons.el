@@ -55,6 +55,8 @@ To watch a unit's journal as it grows, =M-x daemons-journal= (or =daemons-journa
                                     (list "-u" unit)))))
 #+end_src
 
+To change a unit, =M-x daemons-edit= (or =daemons-edit-at-point=) opens its file: the unit's own file when you can write it, e.g. under =~/.config/systemd/user/=, and for a packaged unit the override =systemctl edit= would create, =UNIT.d/override.conf=, so the vendor file under =/usr/lib/systemd= is never opened for writing. System units are edited as root through =/sudo::=, on a remote host through its TRAMP directory. Saving runs =systemctl daemon-reload= (with =--user= for user units) and the echo area says so. The buffer is in =systemd-mode= when that package is installed. This is ~systemd~ only; =daemons-systemd-vendor-directories= lists the directories that count as vendor files.
+
 It looks something like this for systemd:
 
 [[./img/daemons-systemd-demo.png]]

@@ -365,6 +365,75 @@ other.  The state is coloured if `daemons-systemd-color' is set."
             (when time (concat " since " time))
             (unless (string= file "") (concat " \u2014 " file)))))))))
 
+;; edit
+(defcustom daemons-systemd-vendor-directories '("/usr/" "/lib/" "/run/")
+  "Directories whose unit files `daemons-edit' never opens for writing.
+A unit whose file is in one of them, as packaged units are, is edited
+through an override instead (see `daemons-systemd--edit-file')."
+  :type '(repeat directory)
+  :group 'daemons)
+
+(defun daemons-systemd--edit-prefix ()
+  "Return the TRAMP prefix for the files of units in the current scope.
+That of a remote `default-directory'; locally none for a user unit, and
+\"/sudo::\" for a system unit, whose files belong to root."
+  (or (file-remote-p default-directory)
+      (if daemons-systemd-is-user "" "/sudo::")))
+
+(defun daemons-systemd--override-directory (prefix)
+  "Return the directory for overrides of units in the current scope.
+PREFIX is prepended, see `daemons-systemd--edit-prefix'.  For a user
+unit this is systemd/user in $XDG_CONFIG_HOME, which defaults to
+~/.config; on a remote host always ~/.config."
+  (concat prefix
+          (if daemons-systemd-is-user
+              (file-name-as-directory
+               (concat (or (and (not (file-remote-p prefix))
+                                (getenv "XDG_CONFIG_HOME"))
+                           "~/.config")
+                       "/systemd/user"))
+            "/etc/systemd/system/")))
+
+(defun daemons-systemd--vendor-file-p (file)
+  "Return non-nil if the unit FILE is in `daemons-systemd-vendor-directories'."
+  (seq-some (lambda (dir) (string-prefix-p dir file))
+            daemons-systemd-vendor-directories))
+
+(defun daemons-systemd--edit-file (name)
+  "Return the file to edit for the systemd unit NAME.
+That is the unit's own file if it is writable and not a vendor file
+\(see `daemons-systemd-vendor-directories'), otherwise the override that
+`systemctl edit' would create, UNIT.d/override.conf.  A unit that is
+masked or not found has nothing to edit."
+  (let* ((unit (daemons-systemd--unit-name name))
+         (properties (daemons-systemd--show-properties
+                      (daemons--shell-command-to-string
+                       (funcall daemons-systemctl-command-fn
+                                "show -p LoadState -p FragmentPath"
+                                (shell-quote-argument unit)))))
+         (load (cdr (assoc "LoadState" properties)))
+         (fragment (or (cdr (assoc "FragmentPath" properties)) ""))
+         (prefix (daemons-systemd--edit-prefix)))
+    (pcase load
+      ('nil (error "Unexpected output from systemctl show %s: %S" unit properties))
+      ("not-found" (user-error "No such unit: %s" unit))
+      ("masked" (user-error "%s is masked; unmask it first" unit)))
+    (if (and (string-prefix-p "/" fragment)
+             (not (daemons-systemd--vendor-file-p fragment))
+             (file-writable-p (concat prefix fragment)))
+        (concat prefix fragment)
+      (concat (daemons-systemd--override-directory prefix)
+              unit ".d/override.conf"))))
+
+(defun daemons-systemd--edit-setup (_name)
+  "Switch the current buffer to `systemd-mode' if that is installed."
+  (when (and (fboundp 'systemd-mode) (not (derived-mode-p 'systemd-mode)))
+    (systemd-mode)))
+
+(defun daemons-systemd--daemon-reload-cmd (_name)
+  "Return the command that makes systemd reload its unit files."
+  (concat (daemons-systemd--cmd) " daemon-reload"))
+
 (daemons-define-submodule daemons-systemd
   "Daemons submodule for systemd."
 
@@ -380,7 +449,10 @@ other.  The state is coloured if `daemons-systemd-color' is set."
     (disable . (lambda (name) (funcall daemons-systemctl-command-fn "disable" name)))
     (status-line . daemons-systemd--status-line)
     (journal . daemons-systemd--journal)
-    (journal-target . daemons-systemd--journal-target))
+    (journal-target . daemons-systemd--journal-target)
+    (edit . daemons-systemd--edit-file)
+    (edit-setup . daemons-systemd--edit-setup)
+    (edit-saved . daemons-systemd--daemon-reload-cmd))
 
   :list (daemons-systemd--list)
 

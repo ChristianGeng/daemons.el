@@ -554,3 +554,131 @@ A printf stands in for journalctl."
                                (mapcar #'car (daemons-systemd-test--journal-faces))))
                 (should (string-suffix-p "-- journalctl finished --\n" (buffer-string)))))
           (kill-buffer buffer))))))
+
+;; edit tests
+(defmacro daemons-systemd-test--with-show (output &rest body)
+  "Run BODY with `systemctl show' answering OUTPUT.
+In BODY, `commands' are the shell commands run and `config' is a new
+directory that is $XDG_CONFIG_HOME."
+  (declare (indent 1))
+  `(let* ((commands nil)
+          (config (make-temp-file "daemons-systemd-config" t))
+          (process-environment (cons (concat "XDG_CONFIG_HOME=" config)
+                                     process-environment))
+          (daemons--shell-command-to-string-fun
+           (lambda (cmd) (push cmd commands)
+             (if (string-match-p " show " cmd) ,output ""))))
+     (unwind-protect (progn ,@body)
+       (delete-directory config t))))
+
+(ert-deftest systemd-edit-show-command-test ()
+  (dolist (case '((t . "systemctl --user show -p LoadState -p FragmentPath foo.service")
+                  (nil . "systemctl show -p LoadState -p FragmentPath a\\ b.service")))
+    (let ((daemons-systemd-is-user (car case))
+          (default-directory "/tmp/"))
+      (daemons-systemd-test--with-show "LoadState=loaded\nFragmentPath=/usr/lib/x\n"
+        (daemons-systemd--edit-file (if (car case) "foo" "a b"))
+        (should (equal (list (cdr case)) commands))))))
+
+(ert-deftest systemd-edit-own-unit-test ()
+  "A writable unit outside the vendor directories is edited itself."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (daemons-systemd-test--with-show nil
+      (let ((own (expand-file-name "systemd/user/foo.service" config)))
+        (make-directory (file-name-directory own) t)
+        (write-region "" nil own)
+        (let ((daemons--shell-command-to-string-fun
+               (lambda (_) (format "LoadState=loaded\nFragmentPath=%s\n" own))))
+          (should (equal own (daemons-systemd--edit-file "foo"))))))))
+
+(ert-deftest systemd-edit-packaged-unit-test ()
+  "A vendor unit gets the override `systemctl --user edit' would create."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (daemons-systemd-test--with-show
+        "LoadState=loaded\nFragmentPath=/usr/lib/systemd/user/foo.service\n"
+      (should (equal (concat config "/systemd/user/foo.service.d/override.conf")
+                     (daemons-systemd--edit-file "foo"))))))
+
+(ert-deftest systemd-edit-unwritable-unit-test ()
+  "A unit the user cannot write, e.g. in /etc/systemd/user, gets an override."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (daemons-systemd-test--with-show
+        "LoadState=loaded\nFragmentPath=/proc/version\n"
+      (should (equal (concat config "/systemd/user/foo.timer.d/override.conf")
+                     (daemons-systemd--edit-file "foo.timer"))))))
+
+(ert-deftest systemd-edit-system-unit-test ()
+  "A system unit is edited as root, in /etc/systemd/system."
+  (let ((daemons-systemd-is-user nil)
+        (default-directory "/tmp/"))
+    (daemons-systemd-test--with-show
+        "LoadState=loaded\nFragmentPath=/lib/systemd/system/foo.service\n"
+      (should (equal "/sudo::/etc/systemd/system/foo.service.d/override.conf"
+                     (daemons-systemd--edit-file "foo"))))))
+
+(ert-deftest systemd-edit-remote-unit-test ()
+  "On a remote host the files are there, and $XDG_CONFIG_HOME is not used."
+  (dolist (case '((t . "/ssh:host:~/.config/systemd/user/foo.service.d/override.conf")
+                  (nil . "/ssh:host:/etc/systemd/system/foo.service.d/override.conf")))
+    (let ((daemons-systemd-is-user (car case))
+          (default-directory "/ssh:host:/tmp/"))
+      (daemons-systemd-test--with-show
+          "LoadState=loaded\nFragmentPath=/usr/lib/systemd/user/foo.service\n"
+        (should (equal (cdr case) (daemons-systemd--edit-file "foo")))))))
+
+(ert-deftest systemd-edit-unit-without-file-test ()
+  "A unit without a file, such as a transient one, gets an override."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (daemons-systemd-test--with-show "LoadState=loaded\nFragmentPath=\n"
+      (should (equal (concat config "/systemd/user/foo.service.d/override.conf")
+                     (daemons-systemd--edit-file "foo"))))))
+
+(ert-deftest systemd-edit-masked-or-missing-unit-test ()
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/"))
+    (dolist (case '(("masked" . "foo.service is masked; unmask it first")
+                    ("not-found" . "No such unit: foo.service")))
+      (daemons-systemd-test--with-show
+          (format "LoadState=%s\nFragmentPath=\n" (car case))
+        (should (equal (cdr case)
+                       (cadr (should-error (daemons-systemd--edit-file "foo")
+                                           :type 'user-error))))))
+    (daemons-systemd-test--with-show "Failed to connect to bus\n"
+      (should-error (daemons-systemd--edit-file "foo")))))
+
+(ert-deftest systemd-daemon-reload-cmd-test ()
+  (let ((daemons-systemd-is-user t))
+    (should (equal "systemctl --user daemon-reload"
+                   (daemons-systemd--daemon-reload-cmd "foo"))))
+  (let ((daemons-systemd-is-user nil))
+    (should (equal "systemctl daemon-reload"
+                   (daemons-systemd--daemon-reload-cmd "foo")))))
+
+(ert-deftest systemd-edit-packaged-unit-end-to-end-test ()
+  "Editing a packaged unit never visits the vendor file, and saving reloads."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/tmp/")
+        (vendor "/usr/lib/systemd/user/foo.service")
+        (messages nil))
+    (daemons-systemd-test--with-show
+        (format "LoadState=loaded\nFragmentPath=%s\n" vendor)
+      (cl-letf (((symbol-function 'daemons-init-system-submodule)
+                 (lambda () 'daemons-systemd))
+                ((symbol-function 'message)
+                 (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+        (let ((buffer (daemons-edit "foo")))
+          (unwind-protect
+              (with-current-buffer buffer
+                (should (equal (concat config "/systemd/user/foo.service.d/override.conf")
+                               buffer-file-name))
+                (should-not (find-buffer-visiting vendor))
+                (insert "[Service]\nNice=5\n")
+                (save-buffer)
+                (should (file-exists-p buffer-file-name))
+                (should (equal "systemctl --user daemon-reload" (car commands)))
+                (should (member "Ran `systemctl --user daemon-reload'" messages)))
+            (kill-buffer buffer)))))))
