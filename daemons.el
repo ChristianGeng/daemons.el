@@ -428,6 +428,8 @@ Signal a `user-error' if the submodule has none."
 ;; edit
 (defvar-local daemons--edit-saved-command nil
   "The shell command to run after the current buffer is saved, or nil.")
+;; Kept, with the hooks below, when the buffer changes its major mode.
+(put 'daemons--edit-saved-command 'permanent-local t)
 
 (defun daemons--edit-command ()
   "Return the submodule's \\='edit function.
@@ -441,6 +443,8 @@ Signal a `user-error' if the submodule has none."
   (let ((dir (file-name-directory buffer-file-name)))
     (unless (file-directory-p dir) (make-directory dir t))))
 
+(put 'daemons--edit-make-directory 'permanent-local-hook t)
+
 (defun daemons--edit-saved ()
   "Run `daemons--edit-saved-command' and say so in the echo area.
 It runs in the buffer's directory, so on the host of the file and as
@@ -450,6 +454,7 @@ its user.  Any output, such as an error, is shown too."
                                 daemons--edit-saved-command))))
       (message "Ran `%s'%s" daemons--edit-saved-command
                (if (string-empty-p output) "" (concat ": " output))))))
+(put 'daemons--edit-saved 'permanent-local-hook t)
 
 ;;;###autoload
 (defun daemons-edit (name)
