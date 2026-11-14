@@ -126,13 +126,13 @@ To extend =daemons= to support another init system, there are two steps:
 
     ;; This is a map of user commands (see `daemons--commands-alist'):
     :commands
-    '((status . (lambda (name) (format "ex-sys status %s" name)))
-      (start . (lambda (name) (format "ex-sys start %s" name)))
-      (stop . (lambda (name) (format "ex-sys stop %s" name)))
-      (reload . (lambda (name) (format "ex-sys reload %s" name)))
-      (restart . (lambda (name) (format "ex-sys restart %s" name)))
-      (enable . (lambda (name) (format "ex-sys enable %s" name)))
-      (disable . (lambda (name) (format "ex-sys disable %s" name))))
+    '((status . (lambda (name) (format "ex-sys status %s" (shell-quote-argument name))))
+      (start . (lambda (name) (format "ex-sys start %s" (shell-quote-argument name))))
+      (stop . (lambda (name) (format "ex-sys stop %s" (shell-quote-argument name))))
+      (reload . (lambda (name) (format "ex-sys reload %s" (shell-quote-argument name))))
+      (restart . (lambda (name) (format "ex-sys restart %s" (shell-quote-argument name))))
+      (enable . (lambda (name) (format "ex-sys enable %s" (shell-quote-argument name))))
+      (disable . (lambda (name) (format "ex-sys disable %s" (shell-quote-argument name)))))
 
     ;; This is expression to get the daemons list (see `daemons--list'):
     :list

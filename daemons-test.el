@@ -444,6 +444,37 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
                (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
       (should-error (call-interactively #'daemons-journal) :type 'user-error))))
 
+;; quoting tests
+(ert-deftest daemons-commands-quote-daemon-name-test ()
+  "Every submodule passes a daemon name with shell syntax as one argument."
+  (let ((name "a b;echo $HOME")
+        (daemons-systemd-color nil)
+        (daemons-systemctl-command-fn #'daemons-systemctl-cmd))
+    (dolist (submodule '(daemons-systemd daemons-sysvinit daemons-brew
+                         daemons-shepherd daemons-openrc))
+      (require submodule)
+      (dolist (command '(status start stop restart reload enable disable))
+        (let ((fun (daemons--command command submodule)))
+          (when fun
+            (let ((cmd (funcall fun name)))
+              (should (string-match-p (regexp-quote (shell-quote-argument name)) cmd))
+              ;; In a real shell the name is one argument and nothing else runs.
+              (let ((words (split-string
+                            (shell-command-to-string
+                             (concat "printf '[%s]\\n' "
+                                     (substring cmd (1+ (string-match " " cmd)))))
+                            "\n" t)))
+                (should (member (format "[%s]" name) words))
+                (should-not (member (format "[%s]" (getenv "HOME")) words))
+                ;; Nor as output of its own, e.g. after "; echo".
+                (should-not (member (getenv "HOME") words))))))))))
+
+(ert-deftest daemons-systemctl-cmd-without-service-test ()
+  "An empty service, as for daemon-reload, is left out rather than quoted."
+  (let ((daemons-systemd-is-user t))
+    (should (equal "systemctl --user daemon-reload"
+                   (daemons-systemctl-cmd "daemon-reload" "")))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))

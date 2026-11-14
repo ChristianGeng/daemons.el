@@ -28,11 +28,11 @@
   :test (and (eq system-type 'gnu/linux)
              (executable-find "service"))
   :commands
-  '((status . (lambda (name) (format "service %s status" name)))
-    (start . (lambda (name) (format "service %s start" name)))
-    (stop . (lambda (name) (format "service %s stop" name)))
-    (restart . (lambda (name) (format "service %s restart" name)))
-    (reload . (lambda (name) (format "service %s reload" name))))
+  '((status . (lambda (name) (format "service %s status" (shell-quote-argument name))))
+    (start . (lambda (name) (format "service %s start" (shell-quote-argument name))))
+    (stop . (lambda (name) (format "service %s stop" (shell-quote-argument name))))
+    (restart . (lambda (name) (format "service %s restart" (shell-quote-argument name))))
+    (reload . (lambda (name) (format "service %s reload" (shell-quote-argument name)))))
 
   :list (daemons-sysvinit--list)
 
