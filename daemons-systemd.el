@@ -21,6 +21,8 @@
 ;;; Code:
 (require 'seq)
 (require 'daemons)
+;; string-trim and string-empty-p at run time, not autoloaded before Emacs 28.
+(require 'subr-x)
 
 (defcustom daemons-systemd-is-user nil
   "Determines if we want to run commands as `--user'"
@@ -419,6 +421,17 @@ unit this is systemd/user in $XDG_CONFIG_HOME, which defaults to
   "Return non-nil if UNIT is a template, such as getty@.service."
   (string-match-p "@\\.[a-z]+\\'" unit))
 
+(defun daemons-systemd--edit-query (command unit)
+  "Return the output of the systemctl COMMAND for UNIT, for `daemons-edit'.
+A local user unit is the user's own, so it is asked about from the
+user's home, also when the list runs as root with `daemons-always-sudo'."
+  (let ((default-directory (if (and daemons-systemd-is-user
+                                    (not (daemons-systemd--remote-host-p)))
+                               (expand-file-name "~/")
+                             default-directory)))
+    (daemons--shell-command-to-string
+     (funcall daemons-systemctl-command-fn command unit))))
+
 (defun daemons-systemd--edit-file (name)
   "Return the file to edit for the systemd unit NAME.
 That is the unit's own file if it is writable, not a vendor file (see
@@ -434,25 +447,19 @@ A unit that is masked or not found has nothing to edit."
                            unit ".d/override.conf")))
     (if (daemons-systemd--template-p unit)
         ;; systemctl show does not accept a template; list-unit-files does.
-        (let ((state (cadr (split-string
-                            (daemons--shell-command-to-string
-                             (funcall daemons-systemctl-command-fn
-                                      "list-unit-files --no-legend" unit))))))
-          (cond ((null state) (user-error "No such unit: %s" unit))
-                ((string-prefix-p "masked" state)
+        (let* ((output (daemons-systemd--edit-query "list-unit-files --no-legend" unit))
+               (fields (split-string output)))
+          (cond ((string-empty-p (string-trim output))
+                 (user-error "No such unit: %s" unit))
+                ((not (equal unit (car fields)))
+                 (error "Unexpected output from systemctl list-unit-files %s: %s"
+                        unit (string-trim output)))
+                ((string-prefix-p "masked" (cadr fields))
                  (user-error "%s is masked; unmask it first" unit))
                 (t override)))
       (let* ((properties
               (daemons-systemd--show-properties
-               ;; A local user unit is the user's own, also when the list
-               ;; runs as root with `daemons-always-sudo'.
-               (let ((default-directory (if (and daemons-systemd-is-user
-                                                 (not (daemons-systemd--remote-host-p)))
-                                            (expand-file-name "~/")
-                                          default-directory)))
-                 (daemons--shell-command-to-string
-                  (funcall daemons-systemctl-command-fn
-                           "show -p LoadState -p FragmentPath" unit)))))
+               (daemons-systemd--edit-query "show -p LoadState -p FragmentPath" unit)))
              (load (cdr (assoc "LoadState" properties)))
              (fragment (or (cdr (assoc "FragmentPath" properties)) "")))
         (pcase load

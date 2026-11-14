@@ -763,3 +763,17 @@ directory that is $XDG_CONFIG_HOME."
         "LoadState=loaded\nFragmentPath=/usr/lib/systemd/system/foo.service\n"
       (should (equal "/ssh:me@h|sudo:h:/etc/systemd/system/foo.service.d/override.conf"
                      (daemons-systemd--edit-file "foo"))))))
+
+(ert-deftest systemd-edit-template-as-user-and-errors-test ()
+  "A user template is looked up as the user; a failed lookup is an error."
+  (let ((daemons-systemd-is-user t)
+        (default-directory "/sudo::/tmp/")
+        (dirs nil))
+    (daemons-systemd-test--with-show nil
+      (let ((daemons--shell-command-to-string-fun
+             (lambda (_) (push default-directory dirs) "foo@.service enabled enabled\n")))
+        (daemons-systemd--edit-file "foo@.service")
+        (should (equal (list (expand-file-name "~/")) dirs)))
+      (let ((daemons--shell-command-to-string-fun (lambda (_) "Failed to connect to bus\n")))
+        (should (string-prefix-p "Unexpected output"
+                                 (cadr (should-error (daemons-systemd--edit-file "foo@.service")))))))))
