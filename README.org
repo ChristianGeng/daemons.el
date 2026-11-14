@@ -36,6 +36,7 @@ The following commands are available for each daemon:
 | =daemons-enable=  | e                       |
 | =daemons-disable= | d                       |
 | =daemons-edit=    | E                       |
+| =daemons-edit-config= | c                   |
 
 /Sorry, =enable= and =disable= have only been implemented for systemd and GNU Shepherd so far - raise an issue if you want support for your system!/
 

@@ -608,6 +608,27 @@ In BODY, `dir' is that directory and `commands' the shell commands run."
       (should (equal '("foo") (eval (cadr (interactive-form 'daemons-edit-config)))))
       (should (equal '("rygel" "foo") offered)))))
 
+(ert-deftest daemons-config-entry-spellings-test ()
+  (dolist (case '((("rygel" . "/f") . ("/f" nil))
+                  (("rygel" "/f") . ("/f" nil))
+                  (("rygel" "/f" "/s") . ("/f" "/s"))
+                  (("rygel" "/f" . "/s") . ("/f" "/s"))))
+    (let ((daemons-config-files (list (car case))))
+      (should (equal (cdr case) (daemons--config-entry "rygel")))))
+  (should (widget-apply (widget-convert (get 'daemons-config-files 'custom-type))
+                        :match '(("rygel" "/f")))))
+
+(ert-deftest daemons-edit-config-read-only-seed-test ()
+  "A seed copied from a read-only system default can be edited."
+  (daemons-test--with-config
+    (let* ((seed (concat dir "seed.conf"))
+           (file (concat dir "rygel.conf"))
+           (daemons-config-files `(("rygel" ,file ,seed))))
+      (write-region "seeded\n" nil seed)
+      (set-file-modes seed #o444)
+      (with-current-buffer (daemons-edit-config "rygel")
+        (should-not buffer-read-only)))))
+
 (ert-deftest daemons-edit-config-unmapped-test ()
   (let ((daemons-config-files nil))
     (should (equal (format-message "No configuration file for rygel in `daemons-config-files'")

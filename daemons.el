@@ -93,6 +93,7 @@ to it.  NAME is the daemon's name as the list shows it, e.g. \"rygel\".
 FILE and SEED may be TRAMP file names."
   :type '(repeat (cons (string :tag "Daemon")
                        (choice (file :tag "Config file")
+                               (list (file :tag "Config file"))
                                (list (file :tag "Config file")
                                      (file :tag "Copy from if missing")))))
   :group 'daemons)
@@ -136,6 +137,7 @@ Override this to your own value for mocking out shell calls in tests.")
     (define-key map (kbd "e") 'daemons-enable-at-point)
     (define-key map (kbd "d") 'daemons-disable-at-point)
     (define-key map (kbd "E") 'daemons-edit-at-point)
+    (define-key map (kbd "c") 'daemons-edit-config-at-point)
     (define-key map (kbd "u") 'daemons-systemd-toggle-user)
     map)
   "Keymap for daemons mode.")
@@ -511,12 +513,16 @@ SEED is nil when the entry has none."
   (let ((entry (cdr (assoc name daemons-config-files))))
     (cond ((null entry) nil)
           ((stringp entry) (list entry nil))
-          (t (list (car entry) (cadr entry))))))
+          ;; (FILE SEED), (FILE) or, written loosely, (FILE . SEED).
+          (t (list (car entry)
+                   (if (consp (cdr entry)) (cadr entry) (cdr entry)))))))
 
 (defun daemons--edit-config-offer-restart ()
   "Offer to restart the daemon whose configuration was just saved."
   (when (and daemons--edit-config-daemon
-             (y-or-n-p (format "Restart %s? " daemons--edit-config-daemon)))
+             (y-or-n-p (format "Restart %s%s? " daemons--edit-config-daemon
+                               (let ((host (file-remote-p default-directory)))
+                                 (if host (format " on %s" host) "")))))
     (daemons-restart daemons--edit-config-daemon)))
 (put 'daemons--edit-config-offer-restart 'permanent-local-hook t)
 
@@ -541,6 +547,8 @@ config with its TRAMP prefix."
       (if (file-readable-p seed)
           (progn (make-directory (file-name-directory file) t)
                  (copy-file seed file)
+                 ;; A system default may be read-only; the copy is to edit.
+                 (set-file-modes file (logior (file-modes file) #o200))
                  (message "Copied %s to %s" seed file))
         (message "%s is missing and so is %s to copy it from" file seed)))
     (let ((buffer (find-file-noselect file)))
