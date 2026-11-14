@@ -171,10 +171,13 @@ the local user and host, which is root with `daemons-always-sudo'."
   (let ((target (daemons--command 'journal-target (daemons-init-system-submodule))))
     (format "*daemons-journal %s for %s*"
             (if target (funcall target name) name)
-            (or (and (not (daemons--local-sudo-p default-directory))
-                     (daemons--tramp-prefix default-directory))
-                (daemons--get-user-and-hostname
-                 (if daemons-always-sudo "/sudo::" default-directory))))))
+            (cond ((daemons--local-sudo-p default-directory)
+                   ;; Whatever this host is called in the directory.
+                   (format "%s@%s" (or (file-remote-p default-directory 'user) "root")
+                           (system-name)))
+                  ((daemons--tramp-prefix default-directory))
+                  (daemons-always-sudo (format "root@%s" (system-name)))
+                  (t (daemons--get-user-and-hostname default-directory))))))
 
 (defun daemons--local-name (file)
   "Return FILE without its TRAMP prefix, like `file-local-name' of Emacs 26."

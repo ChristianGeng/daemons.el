@@ -595,6 +595,11 @@ A printf stands in for journalctl."
                        (daemons--get-journal-buffer-name "foo"))
                      (let ((default-directory "/sudo::/tmp/abc/"))
                        (daemons--get-journal-buffer-name "foo"))))
+      ;; However the local host is written, one local root journal.
+      (should (equal (let ((default-directory "/sudo::/tmp/"))
+                       (daemons--get-journal-buffer-name "foo"))
+                     (let ((default-directory "/sudo:root@localhost:/tmp/"))
+                       (daemons--get-journal-buffer-name "foo"))))
       ;; ssh tunnels to localhost on different ports are different machines.
       (should-not (equal (let ((default-directory "/ssh:me@localhost#2222:/tmp/"))
                            (daemons--get-journal-buffer-name "foo"))
