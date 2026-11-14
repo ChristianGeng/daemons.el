@@ -697,13 +697,24 @@ directory that is $XDG_CONFIG_HOME."
                          (daemons-systemd--edit-file "foo@bar"))))))))
 
 (ert-deftest systemd-edit-template-test ()
-  "A template gets an override without asking systemctl show, which rejects it."
+  "A template gets an override; list-unit-files checks it, as show rejects it."
   (let ((daemons-systemd-is-user t)
         (default-directory "/tmp/"))
-    (daemons-systemd-test--with-show "should not be asked"
-      (should (equal (concat config "/systemd/user/getty@.service.d/override.conf")
-                     (daemons-systemd--edit-file "getty@.service")))
-      (should-not commands))))
+    (daemons-systemd-test--with-show nil
+      (dolist (case '(("getty@.service enabled enabled\n" . ok)
+                      ("" . "No such unit: getty@.service")
+                      ("getty@.service masked enabled\n" . "getty@.service is masked; unmask it first")))
+        (let* ((commands nil)
+               (daemons--shell-command-to-string-fun
+                (lambda (cmd) (push cmd commands) (car case))))
+          (if (eq (cdr case) 'ok)
+              (should (equal (concat config "/systemd/user/getty@.service.d/override.conf")
+                             (daemons-systemd--edit-file "getty@.service")))
+            (should (equal (cdr case)
+                           (cadr (should-error (daemons-systemd--edit-file "getty@.service")
+                                               :type 'user-error)))))
+          (should (equal '("systemctl --user list-unit-files --no-legend getty@.service")
+                         commands)))))))
 
 (ert-deftest systemd-edit-bad-config-home-test ()
   "An empty or relative $XDG_CONFIG_HOME counts as unset."
