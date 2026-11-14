@@ -278,8 +278,8 @@ The car of each pair is the command symbol (e.g. \\='stop).
 The cdr of each pair is a function taking a daemon name and returning a shell
 command to execute.
 
-e.g. \\='((start . (lambda (x) (format \"service %s start\" x)))
-       (stop . (lambda (x) (format \"service %s stop\" x))))
+e.g. \\='((start . (lambda (x) (format \"service %s start\" (shell-quote-argument x))))
+       (stop . (lambda (x) (format \"service %s stop\" (shell-quote-argument x)))))
 
 The optional \\='status-line entry differs: its function takes a daemon
 name and returns the one-line status itself (see `daemons-status-line').
