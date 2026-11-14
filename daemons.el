@@ -240,8 +240,9 @@ active."
     (daemons--switch-output-buffer-create hostname)))
 
 (defun daemons--run-and-echo (command daemon-name)
-  "Run COMMAND on DAEMON-NAME and say in the echo area what happened.
-See `daemons-command-output'.  The command's output comes first, then
+  "Run COMMAND on DAEMON-NAME and return what to say in the echo area.
+See `daemons-command-output'.  Output of more than one line goes to the
+output buffer instead, and the return value is nil.  The command's output comes first, then
 the daemon's one-line status; a failure to get that status is shown in
 its place.  Return the message."
   (let* ((exit nil)
@@ -275,7 +276,6 @@ its place.  Return the message."
                                      ((and (string-empty-p output) (not failed))
                                       (format "Ran `%s' on `%s'" command daemon-name)))))
                    "\n")))
-        (message "%s" text)
         text))))
 
 (defun daemons--show-output (command daemon-name output)
@@ -317,25 +317,37 @@ sudo directory, as from `daemons-always-sudo', is this host."
 (defun daemons--refresh-list-buffer ()
   "Re-read the lists of daemons on this machine shown in buffers.
 That is the list as the user and as root, e.g. with `daemons-always-sudo'.
-Point stays on the same daemon."
-  (let ((machine (daemons--machine default-directory)))
+Point stays on the same daemon.  Return the messages of the lists that
+could not be re-read."
+  (let ((machine (daemons--machine default-directory))
+        (errors nil))
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (and (derived-mode-p 'daemons-mode)
                    (equal machine (daemons--machine default-directory)))
           ;; A list that cannot be re-read, e.g. over a dead connection,
-          ;; must not hide the command's result or stop the others.
-          (with-demoted-errors "Could not refresh the daemons list: %S"
-            (revert-buffer)))))))
+          ;; must not stop the others; the caller reports the error.
+          (condition-case err
+              (revert-buffer)
+            (error (push (format "Could not refresh %s: %s" (buffer-name)
+                                 (error-message-string err))
+                         errors))))))
+    (nreverse errors)))
 
 (defun daemons--run-changing-state (command daemon-name)
   "Run COMMAND, which may change the state of DAEMON-NAME.
 Show the result as `daemons-command-output' says, then refresh the list."
-  (unwind-protect
-      (if (eq daemons-command-output 'buffer)
-          (daemons--run-with-output-buffer command daemon-name)
-        (daemons--run-and-echo command daemon-name))
-    (daemons--refresh-list-buffer)))
+  (let ((text nil)
+        (errors nil))
+    (unwind-protect
+        (if (eq daemons-command-output 'buffer)
+            (daemons--run-with-output-buffer command daemon-name)
+          (setq text (daemons--run-and-echo command daemon-name)))
+      (setq errors (daemons--refresh-list-buffer))
+      ;; Last, so that nothing the refresh says replaces the result.
+      (let ((lines (delq nil (cons text errors))))
+        (when lines (message "%s" (string-join lines "\n")))))
+    text))
 
 (defun daemons--run (command daemon-name)
   "Run the given COMMAND on DAEMON-NAME.

@@ -574,7 +574,9 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
     (cl-letf (((symbol-function 'daemons--refresh-list)
                (lambda () (error "List source broke"))))
       (daemons-start "foo"))
-    (should (member "foo: up" messages))))
+    ;; One message, the last, with the result first.
+    (should (string-match-p "\\`foo: up\nCould not refresh .*List source broke\\'"
+                            (car messages)))))
 
 (ert-deftest daemons-start-echoes-one-line-output-test ()
   "One line of output, such as an error, is echoed before the state."
