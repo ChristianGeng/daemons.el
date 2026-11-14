@@ -116,6 +116,7 @@ Override this to your own value for mocking out shell calls in tests.")
     (define-key map (kbd "r") 'daemons-reload-at-point)
     (define-key map (kbd "e") 'daemons-enable-at-point)
     (define-key map (kbd "d") 'daemons-disable-at-point)
+    (define-key map (kbd "E") 'daemons-edit-at-point)
     (define-key map (kbd "u") 'daemons-systemd-toggle-user)
     map)
   "Keymap for daemons mode.")
@@ -288,7 +289,15 @@ and starts a process that follows the daemon's journal in the current
 buffer, which is in `daemons-journal-mode' (see `daemons-journal').  The
 optional \\='journal-target function takes a daemon name and returns
 what its journal follows, e.g. a normalised unit name and scope, so that
-names for the same journal share a buffer."
+names for the same journal share a buffer.
+
+The optional \\='edit entry takes a daemon name and returns the file to
+edit for it, possibly not yet existing (see `daemons-edit').  The
+optional \\='edit-setup entry takes a daemon name and prepares the
+buffer visiting that file, e.g. by choosing its major mode.  The
+optional \\='edit-saved entry takes a daemon name and returns a shell
+command to run after that file is saved, such as one that reloads the
+init system's configuration."
   (let  ((submodule (daemons--get-submodule submodule-name)))
     (plist-get submodule :commands)))
 
@@ -325,6 +334,11 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show a one-line status of the daemon NAME at point and return it."
   (interactive (list (daemons--daemon-at-point)))
   (daemons-status-line name))
+
+(defun daemons-edit-at-point (name)
+  "Edit the file of the daemon NAME at point (see `daemons-edit')."
+  (interactive (list (daemons--daemon-at-point)))
+  (daemons-edit name))
 
 (defun daemons-journal-at-point (name)
   "Follow the journal of the daemon NAME at point (see `daemons-journal')."
@@ -394,6 +408,63 @@ Signal a `user-error' if the submodule has none."
                        (delete-directory (file-local-name default-directory))))))))
     (message "%s" line)
     line))
+
+;; edit
+(defvar-local daemons--edit-saved-command nil
+  "The shell command to run after the current buffer is saved, or nil.")
+;; Kept, with the hooks below, when the buffer changes its major mode.
+(put 'daemons--edit-saved-command 'permanent-local t)
+
+(defun daemons--edit-command ()
+  "Return the submodule's \\='edit function.
+Signal a `user-error' if the submodule has none."
+  (let ((submodule (daemons-init-system-submodule)))
+    (or (daemons--command 'edit submodule)
+        (user-error "%s does not support editing a daemon" submodule))))
+
+(defun daemons--edit-make-directory ()
+  "Create the directory of the file the current buffer visits, if missing."
+  (let ((dir (file-name-directory buffer-file-name)))
+    (unless (file-directory-p dir) (make-directory dir t))))
+
+(put 'daemons--edit-make-directory 'permanent-local-hook t)
+
+(defun daemons--edit-saved ()
+  "Run `daemons--edit-saved-command' and say so in the echo area.
+It runs in the buffer's directory, so on the host of the file and as
+its user.  Any output, such as an error, is shown too."
+  (when daemons--edit-saved-command
+    (let ((output (string-trim (daemons--shell-command-to-string
+                                daemons--edit-saved-command))))
+      (message "Ran `%s'%s" daemons--edit-saved-command
+               (if (string-empty-p output) "" (concat ": " output))))))
+(put 'daemons--edit-saved 'permanent-local-hook t)
+
+;;;###autoload
+(defun daemons-edit (name)
+  "Edit the file of the daemon NAME and return its buffer.
+The submodule says which file: for systemd the unit's own file, or an
+override for a packaged unit.  Saving the buffer creates its directory
+if needed, then runs the submodule's follow-up, for systemd
+`systemctl daemon-reload'."
+  (interactive (progn (daemons--edit-command)
+                      (list (daemons--completing-read))))
+  (let* ((submodule (daemons-init-system-submodule))
+         (setup (daemons--command 'edit-setup submodule))
+         (saved (daemons--command 'edit-saved submodule))
+         (buffer (find-file-noselect (funcall (daemons--edit-command) name))))
+    (with-current-buffer buffer
+      ;; Before the buffer-local settings, which a new major mode would reset.
+      (when setup (funcall setup name))
+      ;; A new file in a missing directory opens read-only; saving creates
+      ;; the directory.
+      (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))
+      ;; Fixed now, as the scope, e.g. systemd --user, may change later.
+      (setq daemons--edit-saved-command (and saved (funcall saved name)))
+      (add-hook 'before-save-hook #'daemons--edit-make-directory nil t)
+      (add-hook 'after-save-hook #'daemons--edit-saved nil t))
+    (pop-to-buffer-same-window buffer)
+    buffer))
 
 ;; journal
 (defvar-local daemons--journal-sudo-directory nil

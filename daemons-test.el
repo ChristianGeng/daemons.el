@@ -444,6 +444,92 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
                (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
       (should-error (call-interactively #'daemons-journal) :type 'user-error))))
 
+;; edit tests
+(defvar daemons-test--edit-file nil
+  "The file the edit test submodule returns.")
+
+(daemons-define-submodule daemons-edit-test
+  "Test: edit submodule"
+  :test t
+  :commands '((edit . (lambda (_name) daemons-test--edit-file))
+              (edit-setup . (lambda (name) (setq-local daemons-test--edit-setup name)))
+              (edit-saved . (lambda (name) (format "reload %s" name))))
+  :headers []
+  :list '(("foo" ["foo"]) ("bar" ["bar"])))
+
+(defmacro daemons-test--with-edit (&rest body)
+  "Run BODY with the edit test submodule, whose file is in a new directory.
+In BODY, `dir' is that directory and `commands' the shell commands run."
+  (declare (indent 0))
+  `(let* ((dir (make-temp-file "daemons-edit-test" t))
+          (daemons-test--edit-file (expand-file-name "sub/foo.conf" dir))
+          (commands nil)
+          (daemons--shell-command-to-string-fun
+           (lambda (cmd) (push (cons cmd default-directory) commands) "")))
+     (unwind-protect
+         (daemons-test--with-submodule 'daemons-edit-test ,@body)
+       (let ((buffer (get-file-buffer daemons-test--edit-file)))
+         (when buffer
+           (with-current-buffer buffer (set-buffer-modified-p nil))
+           (kill-buffer buffer)))
+       (delete-directory dir t))))
+
+(ert-deftest daemons-edit-opens-file-test ()
+  "The file the submodule names is visited, prepared by its edit-setup."
+  (daemons-test--with-edit
+    (let ((buffer (daemons-edit "foo")))
+      (should (equal daemons-test--edit-file (buffer-file-name buffer)))
+      (should (eq buffer (current-buffer)))
+      (should (equal "foo" (buffer-local-value 'daemons-test--edit-setup buffer)))
+      (should-not commands))))
+
+(ert-deftest daemons-edit-save-runs-edit-saved-test ()
+  "Saving creates the missing directory, then runs edit-saved there."
+  (daemons-test--with-edit
+    (with-current-buffer (daemons-edit "foo")
+      (insert "x=1\n")
+      (save-buffer))
+    (should (file-exists-p daemons-test--edit-file))
+    (should (equal (list (cons "reload foo" (file-name-directory daemons-test--edit-file)))
+                   commands))
+    (should (member "Ran `reload foo'" messages))))
+
+(ert-deftest daemons-edit-saved-shows-output-test ()
+  "Output of the edit-saved command, such as an error, is shown."
+  (daemons-test--with-edit
+    (let ((daemons--shell-command-to-string-fun (lambda (_cmd) "Failed.\n")))
+      (with-current-buffer (daemons-edit "foo")
+        (insert "x=1\n")
+        (save-buffer)))
+    (should (member "Ran `reload foo': Failed." messages))))
+
+(ert-deftest daemons-edit-survives-mode-change-test ()
+  "Changing the major mode keeps the directory and follow-up hooks."
+  (daemons-test--with-edit
+    (with-current-buffer (daemons-edit "foo")
+      (fundamental-mode)
+      (insert "x=1\n")
+      (save-buffer))
+    (should (file-exists-p daemons-test--edit-file))
+    (should (member "Ran `reload foo'" messages))))
+
+(ert-deftest daemons-edit-at-point-test ()
+  (daemons-test--with-edit
+    (with-temp-buffer
+      (setq-local daemons--current-id "foo")
+      (should (equal daemons-test--edit-file
+                     (buffer-file-name (call-interactively #'daemons-edit-at-point)))))))
+
+(ert-deftest daemons-edit-unsupported-test ()
+  "An init system without an edit command says so, before prompting."
+  (daemons-test--with-submodule 'daemons-no-status-line-test
+    (let ((err (should-error (daemons-edit "foo") :type 'user-error)))
+      (should (equal "daemons-no-status-line-test does not support editing a daemon"
+                     (cadr err))))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
+      (should-error (call-interactively #'daemons-edit) :type 'user-error))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))

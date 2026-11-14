@@ -21,6 +21,8 @@
 ;;; Code:
 (require 'seq)
 (require 'daemons)
+;; string-trim and string-empty-p at run time, not autoloaded before Emacs 28.
+(require 'subr-x)
 
 (defcustom daemons-systemd-is-user nil
   "Determines if we want to run commands as `--user'"
@@ -31,7 +33,8 @@
   "Function used to return string systemctl commands suitable for `shell-command'.
 
 It should take two string input arguments, denoting the desired systemctl
-command, and the service to run the command with.
+command, and the service to run the command with.  The service is empty
+for a command without one, such as daemon-reload; leave it out then.
 
 The default value for this user option will respect the value of
 `daemons-systemd-is-user'.  In order to also do this for any custom value of
@@ -365,6 +368,121 @@ other.  The state is coloured if `daemons-systemd-color' is set."
             (when time (concat " since " time))
             (unless (string= file "") (concat " \u2014 " file)))))))))
 
+;; edit
+(defcustom daemons-systemd-vendor-directories '("/usr/" "/lib/" "/run/")
+  "Directories whose unit files `daemons-edit' never opens for writing.
+A unit whose file is in one of them, as packaged units are, is edited
+through an override instead (see `daemons-systemd--edit-file')."
+  :type '(repeat directory)
+  :group 'daemons)
+
+(defun daemons-systemd--edit-prefix ()
+  "Return the TRAMP prefix for the files of units in the current scope.
+On a remote host that of `default-directory': for a system unit it must
+be a privileged one, such as /ssh:host|sudo:host:.  Locally none for a
+user unit, also with `daemons-always-sudo', and \"/sudo::\" for a system
+unit, whose files belong to root."
+  (if (daemons-systemd--remote-host-p)
+      ;; All of it: for a multi-hop directory such as /ssh:h|sudo:h:,
+      ;; `file-remote-p' gives only the last hop.
+      (substring default-directory 0
+                 (- (length default-directory)
+                    (length (file-remote-p default-directory 'localname))))
+    (if daemons-systemd-is-user "" "/sudo::")))
+
+(defun daemons-systemd--config-home ()
+  "Return $XDG_CONFIG_HOME as a directory, or ~/.config/ if unset.
+An empty or relative value counts as unset, as it does for systemd."
+  (let ((home (getenv "XDG_CONFIG_HOME")))
+    (file-name-as-directory
+     (if (and home (file-name-absolute-p home) (string-prefix-p "/" home))
+         home
+       "~/.config"))))
+
+(defun daemons-systemd--override-directory (prefix)
+  "Return the directory for overrides of units in the current scope.
+PREFIX is prepended, see `daemons-systemd--edit-prefix'.  For a user
+unit this is systemd/user in $XDG_CONFIG_HOME, which defaults to
+~/.config; on a remote host always ~/.config."
+  (concat prefix
+          (if daemons-systemd-is-user
+              (concat (if (file-remote-p prefix)
+                          "~/.config/"
+                        (daemons-systemd--config-home))
+                      "systemd/user/")
+            "/etc/systemd/system/")))
+
+(defun daemons-systemd--vendor-file-p (file)
+  "Return non-nil if the unit FILE is in `daemons-systemd-vendor-directories'."
+  (seq-some (lambda (dir) (string-prefix-p dir file))
+            daemons-systemd-vendor-directories))
+
+(defun daemons-systemd--template-p (unit)
+  "Return non-nil if UNIT is a template, such as getty@.service."
+  (string-match-p "@\\.[a-z]+\\'" unit))
+
+(defun daemons-systemd--edit-query (command unit)
+  "Return the output of the systemctl COMMAND for UNIT, for `daemons-edit'.
+A local user unit is the user's own, so it is asked about from the
+user's home, also when the list runs as root with `daemons-always-sudo'."
+  (let ((default-directory (if (and daemons-systemd-is-user
+                                    (not (daemons-systemd--remote-host-p)))
+                               (expand-file-name "~/")
+                             default-directory)))
+    (daemons--shell-command-to-string
+     (funcall daemons-systemctl-command-fn command unit))))
+
+(defun daemons-systemd--edit-file (name)
+  "Return the file to edit for the systemd unit NAME.
+That is the unit's own file if it is writable, not a vendor file (see
+`daemons-systemd-vendor-directories') and named after the unit,
+otherwise the override that `systemctl edit' would create,
+UNIT.d/override.conf.  So an instance such as foo@bar.service gets its
+own override, not its template's file, which all instances share, and an
+alias gets one too.  A template gets an override for all its instances.
+A unit that is masked or not found has nothing to edit."
+  (let* ((unit (daemons-systemd--unit-name name))
+         (prefix (daemons-systemd--edit-prefix))
+         (override (concat (daemons-systemd--override-directory prefix)
+                           unit ".d/override.conf")))
+    (if (daemons-systemd--template-p unit)
+        ;; systemctl show does not accept a template; list-unit-files does.
+        (let* ((output (daemons-systemd--edit-query "list-unit-files --no-legend" unit))
+               (fields (split-string output)))
+          (cond ((string-empty-p (string-trim output))
+                 (user-error "No such unit: %s" unit))
+                ((not (equal unit (car fields)))
+                 (error "Unexpected output from systemctl list-unit-files %s: %s"
+                        unit (string-trim output)))
+                ((string-prefix-p "masked" (cadr fields))
+                 (user-error "%s is masked; unmask it first" unit))
+                (t override)))
+      (let* ((properties
+              (daemons-systemd--show-properties
+               (daemons-systemd--edit-query "show -p LoadState -p FragmentPath" unit)))
+             (load (cdr (assoc "LoadState" properties)))
+             (fragment (or (cdr (assoc "FragmentPath" properties)) "")))
+        (pcase load
+          ('nil (error "Unexpected output from systemctl show %s: %S" unit properties))
+          ("not-found" (user-error "No such unit: %s" unit))
+          ("masked" (user-error "%s is masked; unmask it first" unit)))
+        (if (and (string-prefix-p "/" fragment)
+                 (equal unit (file-name-nondirectory fragment))
+                 (not (daemons-systemd--vendor-file-p fragment))
+                 (file-writable-p (concat prefix fragment)))
+            (concat prefix fragment)
+          override)))))
+
+(defun daemons-systemd--edit-setup (_name)
+  "Switch the current buffer to `systemd-mode' if that is installed."
+  (when (and (fboundp 'systemd-mode) (not (derived-mode-p 'systemd-mode)))
+    (systemd-mode)))
+
+(defun daemons-systemd--daemon-reload-cmd (_name)
+  "Return the command that makes systemd reload its unit files.
+It is built by `daemons-systemctl-command-fn', as the other commands are."
+  (string-trim (funcall daemons-systemctl-command-fn "daemon-reload" "")))
+
 (daemons-define-submodule daemons-systemd
   "Daemons submodule for systemd."
 
@@ -380,7 +498,10 @@ other.  The state is coloured if `daemons-systemd-color' is set."
     (disable . (lambda (name) (funcall daemons-systemctl-command-fn "disable" name)))
     (status-line . daemons-systemd--status-line)
     (journal . daemons-systemd--journal)
-    (journal-target . daemons-systemd--journal-target))
+    (journal-target . daemons-systemd--journal-target)
+    (edit . daemons-systemd--edit-file)
+    (edit-setup . daemons-systemd--edit-setup)
+    (edit-saved . daemons-systemd--daemon-reload-cmd))
 
   :list (daemons-systemd--list)
 
