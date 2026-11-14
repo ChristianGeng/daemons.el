@@ -83,6 +83,12 @@ With STAY the menu stays open, and its header is redrawn."
   (daemons-journal daemons--dispatch-name))
 (daemons--define-dispatch-suffix edit daemons-edit)
 
+(transient-define-suffix daemons-dispatch--edit-config ()
+  "Call `daemons-edit-config' on the daemon of the menu."
+  :if (lambda () (daemons--config-entry daemons--dispatch-name))
+  (interactive)
+  (daemons-edit-config daemons--dispatch-name))
+
 (transient-define-prefix daemons-dispatch-menu ()
   "Menu of the actions for one daemon; see `daemons-dispatch'."
   [:description daemons--dispatch-header
@@ -97,7 +103,8 @@ With STAY the menu stays open, and its header is redrawn."
     ("i" "status" daemons-dispatch--status)
     ("j" "journal" daemons-dispatch--journal)]
    ["Edit"
-    ("E" "unit file" daemons-dispatch--edit)]])
+    ("E" "unit file" daemons-dispatch--edit)
+    ("c" "config file" daemons-dispatch--edit-config)]])
 
 ;;;###autoload
 (defun daemons-dispatch (name)

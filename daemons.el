@@ -85,6 +85,19 @@ otherwise, and when this is nil, `RET' shows the daemon's status."
   :type 'boolean
   :group 'daemons)
 
+(defcustom daemons-config-files nil
+  "The configuration files of daemons, for `daemons-edit-config'.
+Each entry is (NAME . FILE), or (NAME FILE SEED): when FILE does not
+exist, `daemons-edit-config' first copies SEED, e.g. a system default,
+to it.  NAME is the daemon's name as the list shows it, e.g. \"rygel\".
+FILE and SEED may be TRAMP file names."
+  :type '(repeat (cons (string :tag "Daemon")
+                       (choice (file :tag "Config file")
+                               (list (file :tag "Config file"))
+                               (list (file :tag "Config file")
+                                     (file :tag "Copy from if missing")))))
+  :group 'daemons)
+
 (defcustom daemons-show-output-in-minibuffer nil
   "If non-nil, all output will be shown in the minibuffer."
   :type 'boolean
@@ -124,6 +137,7 @@ Override this to your own value for mocking out shell calls in tests.")
     (define-key map (kbd "e") 'daemons-enable-at-point)
     (define-key map (kbd "d") 'daemons-disable-at-point)
     (define-key map (kbd "E") 'daemons-edit-at-point)
+    (define-key map (kbd "c") 'daemons-edit-config-at-point)
     (define-key map (kbd "u") 'daemons-systemd-toggle-user)
     map)
   "Keymap for daemons mode.")
@@ -486,6 +500,71 @@ if needed, then runs the submodule's follow-up, for systemd
       (add-hook 'after-save-hook #'daemons--edit-saved nil t))
     (pop-to-buffer-same-window buffer)
     buffer))
+
+;; edit config
+(defvar-local daemons--edit-config-daemon nil
+  "The daemon whose configuration the current buffer edits.")
+;; Kept, with its hook, when the buffer changes its major mode.
+(put 'daemons--edit-config-daemon 'permanent-local t)
+
+(defun daemons--config-entry (name)
+  "Return (FILE SEED) for the daemon NAME from `daemons-config-files', or nil.
+SEED is nil when the entry has none."
+  (let ((entry (cdr (assoc name daemons-config-files))))
+    (cond ((null entry) nil)
+          ((stringp entry) (list entry nil))
+          ;; (FILE SEED), (FILE) or, written loosely, (FILE . SEED).
+          (t (list (car entry)
+                   (if (consp (cdr entry)) (cadr entry) (cdr entry)))))))
+
+(defun daemons--edit-config-offer-restart ()
+  "Offer to restart the daemon whose configuration was just saved."
+  (when (and daemons--edit-config-daemon
+             (y-or-n-p (format "Restart %s%s? " daemons--edit-config-daemon
+                               (let ((host (file-remote-p default-directory)))
+                                 (if host (format " on %s" host) "")))))
+    (daemons-restart daemons--edit-config-daemon)))
+(put 'daemons--edit-config-offer-restart 'permanent-local-hook t)
+
+;;;###autoload
+(defun daemons-edit-config (name)
+  "Edit the configuration file of the daemon NAME and return its buffer.
+The file comes from `daemons-config-files'; when it is missing and the
+entry names a seed file, the seed is copied to it first.  A missing
+file's directory is created on save.  After saving, you are offered to
+restart the daemon, on the host of the file: a local file name restarts
+the local daemon, also from the list of a remote host, so name such a
+config with its TRAMP prefix."
+  (interactive
+   (list (if daemons-config-files
+             (completing-read "Daemon: " (mapcar #'car daemons-config-files) nil t)
+           (user-error "No daemons in `daemons-config-files'"))))
+  (pcase-let ((`(,file ,seed) (or (daemons--config-entry name)
+                                  (user-error "No configuration file for %s in `daemons-config-files'"
+                                              name))))
+    (setq file (expand-file-name file))
+    (when (and seed (not (file-exists-p file)))
+      (if (file-readable-p seed)
+          (progn (make-directory (file-name-directory file) t)
+                 (copy-file seed file)
+                 ;; A system default may be read-only; the copy is to edit.
+                 (set-file-modes file (logior (file-modes file) #o200))
+                 (message "Copied %s to %s" seed file))
+        (message "%s is missing and so is %s to copy it from" file seed)))
+    (let ((buffer (find-file-noselect file)))
+      (with-current-buffer buffer
+        ;; A new file in a missing directory opens read-only.
+        (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))
+        (setq daemons--edit-config-daemon name)
+        (add-hook 'before-save-hook #'daemons--edit-make-directory nil t)
+        (add-hook 'after-save-hook #'daemons--edit-config-offer-restart nil t))
+      (pop-to-buffer-same-window buffer)
+      buffer)))
+
+(defun daemons-edit-config-at-point (name)
+  "Edit the configuration file of the daemon NAME at point."
+  (interactive (list (daemons--daemon-at-point)))
+  (daemons-edit-config name))
 
 ;; journal
 (defvar-local daemons--journal-sudo-directory nil

@@ -530,6 +530,126 @@ In BODY, `dir' is that directory and `commands' the shell commands run."
                (lambda (&rest _) (ert-fail "prompted for a daemon name"))))
       (should-error (call-interactively #'daemons-edit) :type 'user-error))))
 
+;; edit config tests
+(defmacro daemons-test--with-config (&rest body)
+  "Run BODY with `dir', a new directory, and `messages' collected."
+  (declare (indent 0))
+  `(let ((dir (file-name-as-directory (make-temp-file "daemons-config-test" t)))
+         (messages nil))
+     (cl-letf (((symbol-function 'message)
+                (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+       (unwind-protect (progn ,@body)
+         (dolist (buffer (buffer-list))
+           (when (and (buffer-file-name buffer)
+                      (string-prefix-p dir (buffer-file-name buffer)))
+             (with-current-buffer buffer (set-buffer-modified-p nil))
+             (kill-buffer buffer)))
+         (delete-directory dir t)))))
+
+(ert-deftest daemons-edit-config-opens-mapped-file-test ()
+  (daemons-test--with-config
+    (let* ((file (concat dir "rygel.conf"))
+           (daemons-config-files `(("rygel" . ,file))))
+      (write-region "x=1\n" nil file)
+      (should (equal file (buffer-file-name (daemons-edit-config "rygel")))))))
+
+(ert-deftest daemons-edit-config-seeds-missing-file-test ()
+  "A missing config is copied from the seed, directory and all."
+  (daemons-test--with-config
+    (let* ((seed (concat dir "etc-rygel.conf"))
+           (file (concat dir "home/.config/rygel.conf"))
+           (daemons-config-files `(("rygel" ,file ,seed))))
+      (write-region "seeded\n" nil seed)
+      (with-current-buffer (daemons-edit-config "rygel")
+        (should (equal "seeded\n" (buffer-string))))
+      (should (member (format "Copied %s to %s" seed file) messages)))))
+
+(ert-deftest daemons-edit-config-keeps-existing-file-test ()
+  "An existing config is not overwritten by the seed."
+  (daemons-test--with-config
+    (let* ((seed (concat dir "seed.conf"))
+           (file (concat dir "rygel.conf"))
+           (daemons-config-files `(("rygel" ,file ,seed))))
+      (write-region "seed\n" nil seed)
+      (write-region "mine\n" nil file)
+      (with-current-buffer (daemons-edit-config "rygel")
+        (should (equal "mine\n" (buffer-string)))))))
+
+(ert-deftest daemons-edit-config-new-file-in-new-directory-test ()
+  "An unseeded config in a missing directory is writable and saves."
+  (daemons-test--with-config
+    (let* ((file (concat dir "new/sub/rygel.conf"))
+           (daemons-config-files `(("rygel" . ,file))))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) nil)))
+        (with-current-buffer (daemons-edit-config "rygel")
+          (should-not buffer-read-only)
+          (insert "x=1\n")
+          (save-buffer)))
+      (should (file-exists-p file)))))
+
+(ert-deftest daemons-edit-config-survives-mode-change-test ()
+  (daemons-test--with-config
+    (let* ((file (concat dir "rygel.conf"))
+           (daemons-config-files `(("rygel" . ,file)))
+           (restarted nil))
+      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
+                ((symbol-function 'daemons-restart) (lambda (name) (push name restarted))))
+        (with-current-buffer (daemons-edit-config "rygel")
+          (fundamental-mode)
+          (insert "x\n")
+          (save-buffer)))
+      (should (equal '("rygel") restarted)))))
+
+(ert-deftest daemons-edit-config-completes-mapped-daemons-test ()
+  (let ((daemons-config-files '(("rygel" . "/tmp/r.conf") ("foo" . "/tmp/f.conf")))
+        (offered nil))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt collection &rest _) (setq offered collection) "foo")))
+      (should (equal '("foo") (eval (cadr (interactive-form 'daemons-edit-config)))))
+      (should (equal '("rygel" "foo") offered)))))
+
+(ert-deftest daemons-config-entry-spellings-test ()
+  (dolist (case '((("rygel" . "/f") . ("/f" nil))
+                  (("rygel" "/f") . ("/f" nil))
+                  (("rygel" "/f" "/s") . ("/f" "/s"))
+                  (("rygel" "/f" . "/s") . ("/f" "/s"))))
+    (let ((daemons-config-files (list (car case))))
+      (should (equal (cdr case) (daemons--config-entry "rygel")))))
+  (should (widget-apply (widget-convert (get 'daemons-config-files 'custom-type))
+                        :match '(("rygel" "/f")))))
+
+(ert-deftest daemons-edit-config-read-only-seed-test ()
+  "A seed copied from a read-only system default can be edited."
+  (daemons-test--with-config
+    (let* ((seed (concat dir "seed.conf"))
+           (file (concat dir "rygel.conf"))
+           (daemons-config-files `(("rygel" ,file ,seed))))
+      (write-region "seeded\n" nil seed)
+      (set-file-modes seed #o444)
+      (with-current-buffer (daemons-edit-config "rygel")
+        (should-not buffer-read-only)))))
+
+(ert-deftest daemons-edit-config-unmapped-test ()
+  (let ((daemons-config-files nil))
+    (should (equal (format-message "No configuration file for rygel in `daemons-config-files'")
+                   (cadr (should-error (daemons-edit-config "rygel") :type 'user-error))))))
+
+(ert-deftest daemons-edit-config-save-offers-restart-test ()
+  "Saving offers a restart, which runs only on yes."
+  (daemons-test--with-config
+    (let* ((file (concat dir "rygel.conf"))
+           (daemons-config-files `(("rygel" . ,file)))
+           (restarted nil))
+      (dolist (answer '(nil t))
+        (cl-letf (((symbol-function 'y-or-n-p) (lambda (prompt)
+                                                  (should (equal "Restart rygel? " prompt))
+                                                  answer))
+                  ((symbol-function 'daemons-restart) (lambda (name) (push name restarted))))
+          (with-current-buffer (daemons-edit-config "rygel")
+            (insert "x\n")
+            (save-buffer))))
+      (should (equal '("rygel") restarted)))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   ;; The menu needs transient, built in from Emacs 28 only.
