@@ -433,8 +433,15 @@ A unit that is masked or not found has nothing to edit."
          (override (concat (daemons-systemd--override-directory prefix)
                            unit ".d/override.conf")))
     (if (daemons-systemd--template-p unit)
-        ;; systemctl show does not accept a template.
-        override
+        ;; systemctl show does not accept a template; list-unit-files does.
+        (let ((state (cadr (split-string
+                            (daemons--shell-command-to-string
+                             (funcall daemons-systemctl-command-fn
+                                      "list-unit-files --no-legend" unit))))))
+          (cond ((null state) (user-error "No such unit: %s" unit))
+                ((string-prefix-p "masked" state)
+                 (user-error "%s is masked; unmask it first" unit))
+                (t override)))
       (let* ((properties
               (daemons-systemd--show-properties
                ;; A local user unit is the user's own, also when the list
