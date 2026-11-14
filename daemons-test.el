@@ -532,7 +532,10 @@ In BODY, `dir' is that directory and `commands' the shell commands run."
 
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
-  (load-file test-suite))
+  ;; The menu needs transient, built in from Emacs 28 only.
+  (unless (and (string-match-p "dispatch" test-suite)
+               (not (require 'transient nil t)))
+    (load-file test-suite)))
 
 ;; helper function tests
 (ert-deftest daemons--split-lines-test ()

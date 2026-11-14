@@ -171,3 +171,6 @@
         (should (equal "foo: up" (substring-no-properties (daemons--dispatch-header))))
         (daemons--dispatch-header)
         (should (= 0 found))))))
+
+(ert-deftest daemons-dispatch-no-daemon-test ()
+  (should-error (daemons-dispatch nil) :type 'user-error))
