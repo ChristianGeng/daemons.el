@@ -319,6 +319,10 @@ other.  The state is coloured if `daemons-systemd-color' is set."
          (let ((time (and (string= active "active")
                           (daemons-systemd--status-line-time since))))
            (concat
+            ;; A unit file that failed to load, or is masked, would
+            ;; otherwise read like a cleanly stopped unit.
+            (unless (or (member load '("loaded" "")) (equal load file))
+              (concat (daemons-systemd--status-line-colour 'daemons-systemd-bad load) ", "))
             (daemons-systemd--status-line-colour
              (daemons-systemd--status-line-face active)
              (format "%s (%s)" active sub))

@@ -215,6 +215,15 @@ The directory `daemons--sudo' makes is removed afterwards, also on error."
           (should (file-directory-p other)))
       (when (file-directory-p other) (delete-directory other)))))
 
+(ert-deftest daemons-status-line-sudo-directory-gone-test ()
+  "If the sudo directory is gone already, the status line is still returned."
+  (let ((daemons-always-sudo t))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-status-line-test))
+              ((symbol-function 'daemons--sudo)
+               (lambda () (setq default-directory "/tmp/daemons-gone-already-xyz/")))
+              ((symbol-function 'message) #'ignore))
+      (should (equal "foo: up" (daemons-status-line "foo"))))))
+
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
   (load-file test-suite))

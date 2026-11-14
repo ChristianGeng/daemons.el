@@ -273,3 +273,11 @@ A local /sudo:: directory, as from `daemons-always-sudo', is not remote."
     (should (equal (concat (format-time-string "%F") " 09:14")
                    (let ((default-directory "/ssh:box:/tmp/"))
                      (daemons-systemd--status-line-time timestamp))))))
+
+(ert-deftest systemd-status-line-shows-bad-load-state-test ()
+  "A unit file that failed to load does not read like a stopped unit."
+  (let ((daemons-systemd-color nil)
+        (daemons--shell-command-to-string-fun
+         (lambda (_) "LoadState=error\nActiveState=inactive\nSubState=dead\nUnitFileState=\nActiveEnterTimestamp=n/a\n")))
+    (should (equal "foo.service: error, inactive (dead)"
+                   (daemons-systemd--status-line "foo")))))
