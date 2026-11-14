@@ -743,3 +743,12 @@ directory that is $XDG_CONFIG_HOME."
                "LoadState=loaded\nFragmentPath=/usr/lib/systemd/user/foo.service\n")))
         (daemons-systemd--edit-file "foo")
         (should (equal (list (expand-file-name "~/")) dirs))))))
+
+(ert-deftest systemd-edit-multi-hop-prefix-test ()
+  "A privileged multi-hop directory keeps all its hops in the file name."
+  (let ((daemons-systemd-is-user nil)
+        (default-directory "/ssh:me@h|sudo:h:/tmp/"))
+    (daemons-systemd-test--with-show
+        "LoadState=loaded\nFragmentPath=/usr/lib/systemd/system/foo.service\n"
+      (should (equal "/ssh:me@h|sudo:h:/etc/systemd/system/foo.service.d/override.conf"
+                     (daemons-systemd--edit-file "foo"))))))

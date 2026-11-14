@@ -381,7 +381,11 @@ be a privileged one, such as /ssh:host|sudo:host:.  Locally none for a
 user unit, also with `daemons-always-sudo', and \"/sudo::\" for a system
 unit, whose files belong to root."
   (if (daemons-systemd--remote-host-p)
-      (file-remote-p default-directory)
+      ;; All of it: for a multi-hop directory such as /ssh:h|sudo:h:,
+      ;; `file-remote-p' gives only the last hop.
+      (substring default-directory 0
+                 (- (length default-directory)
+                    (length (file-remote-p default-directory 'localname))))
     (if daemons-systemd-is-user "" "/sudo::")))
 
 (defun daemons-systemd--config-home ()
