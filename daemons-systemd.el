@@ -21,6 +21,8 @@
 ;;; Code:
 (require 'seq)
 (require 'daemons)
+;; string-suffix-p and friends at run time, not autoloaded before Emacs 28.
+(require 'subr-x)
 
 (defcustom daemons-systemd-is-user nil
   "Determines if we want to run commands as `--user'"
