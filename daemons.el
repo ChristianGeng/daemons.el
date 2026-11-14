@@ -113,6 +113,11 @@ sudo."
 
 Override this to your own value for mocking out shell calls in tests.")
 
+(defvar daemons--process-shell-command-fun 'process-file-shell-command
+  "Contains a `process-file-shell-command' function.
+Start, stop and the other state-changing commands run through it, as it
+returns the exit status.  Override it for mocking out shell calls in tests.")
+
 (defvar daemons--shell-command-to-string-fun 'shell-command-to-string
   "Contains a `shell-command-to-string' function.
 Override this to your own value for mocking out shell calls in tests.")
@@ -247,8 +252,8 @@ its place.  Return the message."
                          (let ((fun (or (daemons--command command (daemons-init-system-submodule))
                                         (error "No such daemon command: %s" command))))
                            ;; Unlike `shell-command', this returns the exit status.
-                           (setq exit (process-file-shell-command
-                                       (funcall fun daemon-name) nil t))
+                           (setq exit (funcall daemons--process-shell-command-fun
+                                               (funcall fun daemon-name) nil t))
                            (string-trim (buffer-string)))
                        (unless (equal dir default-directory)
                          (delete-directory (or (file-remote-p default-directory 'localname)
@@ -318,7 +323,10 @@ Point stays on the same daemon."
       (with-current-buffer buffer
         (when (and (derived-mode-p 'daemons-mode)
                    (equal machine (daemons--machine default-directory)))
-          (revert-buffer))))))
+          ;; A list that cannot be re-read, e.g. over a dead connection,
+          ;; must not hide the command's result or stop the others.
+          (with-demoted-errors "Could not refresh the daemons list: %S"
+            (revert-buffer)))))))
 
 (defun daemons--run-changing-state (command daemon-name)
   "Run COMMAND, which may change the state of DAEMON-NAME.
@@ -505,7 +513,8 @@ With `daemons-always-sudo' it runs as root."
       (unwind-protect (funcall status-line name)
         ;; Remove the directory `daemons--sudo' made for this call.
         (unless (equal dir default-directory)
-          (delete-directory (file-local-name default-directory)))))))
+          (delete-directory (or (file-remote-p default-directory 'localname)
+                                    default-directory)))))))
 
 ;; journal
 (defvar-local daemons--journal-sudo-directory nil

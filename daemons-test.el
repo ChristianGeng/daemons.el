@@ -554,7 +554,7 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
   (daemons-test--with-state
     (cl-letf (((symbol-function 'daemons-init-system-submodule)
                (lambda () 'daemons-state-no-status-line-test))
-              ((symbol-function 'process-file-shell-command) (lambda (&rest _) 1)))
+              (daemons--process-shell-command-fun (lambda (&rest _) 1)))
       (daemons-stop "foo"))
     (should (equal '("`stop' on `foo' failed (exit 1)") messages))))
 
@@ -567,6 +567,14 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
         (daemons-start "foo")))
     (should (equal '("Failed to connect to bus\nfoo: Unexpected output from systemctl show")
                    messages))))
+
+(ert-deftest daemons-refresh-error-does-not-hide-result-test ()
+  "A list that fails to refresh does not turn a successful command into an error."
+  (daemons-test--with-state
+    (cl-letf (((symbol-function 'daemons--refresh-list)
+               (lambda () (error "List source broke"))))
+      (daemons-start "foo"))
+    (should (member "foo: up" messages))))
 
 (ert-deftest daemons-start-echoes-one-line-output-test ()
   "One line of output, such as an error, is echoed before the state."
