@@ -613,3 +613,11 @@ A printf stands in for journalctl."
       (should (string-match-p "for /ssh:host:\\*\\'"
                               (let ((default-directory "/ssh:host:/tmp/"))
                                 (daemons--get-journal-buffer-name "foo")))))))
+
+(ert-deftest systemd-status-line-shows-bad-load-state-test ()
+  "A unit file that failed to load does not read like a stopped unit."
+  (let ((daemons-systemd-color nil)
+        (daemons--shell-command-to-string-fun
+         (lambda (_) "LoadState=error\nActiveState=inactive\nSubState=dead\nUnitFileState=\nActiveEnterTimestamp=n/a\n")))
+    (should (equal "foo.service: error, inactive (dead)"
+                   (daemons-systemd--status-line "foo")))))

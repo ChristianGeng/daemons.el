@@ -421,8 +421,11 @@ Signal a `user-error' if the submodule has none."
                    (unwind-protect (funcall status-line name)
                      ;; Remove only the directory `daemons--sudo' made for
                      ;; this call, wherever STATUS-LINE left us.
+                     ;; Not to replace the result, or the real error, if the
+                     ;; directory is gone already.
                      (when sudo-directory
-                       (delete-directory (daemons--local-name sudo-directory))))))))
+                       (ignore-errors
+                         (delete-directory (daemons--local-name sudo-directory)))))))))
     (message "%s" line)
     line))
 
