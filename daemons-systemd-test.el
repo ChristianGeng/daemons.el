@@ -150,7 +150,9 @@ Return the fontified buffer text and the command that was run."
 (ert-deftest systemd-status-colours-whole-state-test ()
   "The parenthesised part of a failed or changing state is coloured too."
   (dolist (case '(("failed (Result: exit-code)" . daemons-systemd-bad)
-                  ("activating (start-pre)" . daemons-systemd-changing)))
+                  ("activating (start-pre)" . daemons-systemd-changing)
+                  ("maintenance (cleaning)" . daemons-systemd-bad)
+                  ("refreshing (mounted)" . daemons-systemd-changing)))
     (with-temp-buffer
       (insert "   Active: " (car case) " since Sun\n")
       (setq font-lock-defaults '(daemons-systemd--status-font-lock-keywords t))

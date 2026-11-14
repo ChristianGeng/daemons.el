@@ -40,7 +40,14 @@ this option, see the implementation of `daemons-systemd--cmd'."
   :group 'daemons)
 
 (defcustom daemons-systemd-color nil
-  "If non-nil, colorize services in systemd buffers according to their statuses."
+  "If non-nil, colorize services in systemd buffers according to their statuses.
+The status command then runs with SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0, set
+by `env' right before systemctl, so that journal lines of priority err
+and above can be marked; see `daemons-systemd--status-cmd'.  With a
+custom `daemons-systemctl-command-fn' that wraps sudo, sudo then runs
+env: if sudoers allows only systemctl, leave this off.  Wrappers that
+pass no environment on, such as ssh or sh -c, keep the plain colours of
+the state but lose the marks on journal lines."
   :type 'boolean
   :group 'daemons)
 
@@ -187,7 +194,8 @@ commands working."
   '(("^ *\\(Loaded\\|Active\\):" 1 'daemons-systemd-label)
     ("^ *Active: \\(active ([^)\n]*)\\)" 1 'daemons-systemd-enabled)
     ("^ *Active: \\(failed\\(?: ([^)\n]*)\\)?\\|inactive (dead)\\)" 1 'daemons-systemd-bad)
-    ("^ *Active: \\(\\(?:\\(?:de\\)?activating\\|reloading\\)\\(?: ([^)\n]*)\\)?\\)"
+    ("^ *Active: \\(maintenance\\(?: ([^)\n]*)\\)?\\)" 1 'daemons-systemd-bad)
+    ("^ *Active: \\(\\(?:\\(?:de\\)?activating\\|reloading\\|refreshing\\)\\(?: ([^)\n]*)\\)?\\)"
      1 'daemons-systemd-changing))
   "Font-lock keywords for systemctl status output.")
 
