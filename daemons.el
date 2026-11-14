@@ -184,16 +184,24 @@ the local user and host, which is root with `daemons-always-sudo'."
     (format "*daemons-journal %s for %s*"
             (if target (funcall target name) name)
             (or (and (not (daemons--local-sudo-p default-directory))
-                     (file-remote-p default-directory))
+                     (daemons--tramp-prefix default-directory))
                 (daemons--get-user-and-hostname
                  (if daemons-always-sudo "/sudo::" default-directory))))))
+
+(defun daemons--tramp-prefix (dir)
+  "Return the whole TRAMP prefix of DIR, every hop of it, or nil if local.
+Unlike `file-remote-p', which gives only the last hop of a multi-hop
+name such as /ssh:me@gw|ssh:me@host:/tmp/."
+  (let ((localname (file-remote-p dir 'localname)))
+    (when localname
+      (substring dir 0 (- (length dir) (length localname))))))
 
 (defun daemons--local-sudo-p (dir)
   "Return non-nil if DIR is a sudo directory on this host, e.g. /sudo::/tmp/.
 Such a directory, as `daemons-always-sudo' makes, names the local host.
 Only a single sudo, doas or su hop counts: an ssh connection, also to
-localhost on some port, is another machine."
-  (let ((prefix (file-remote-p dir)))
+localhost on some port or through a gateway, is another machine."
+  (let ((prefix (daemons--tramp-prefix dir)))
     (and prefix
          (string-match-p "\\`/\\(?:sudo\\|doas\\|su\\):[^:|]*:\\'" prefix)
          (member (file-remote-p dir 'host) (list (system-name) "localhost" "")))))
