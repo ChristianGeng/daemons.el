@@ -116,6 +116,7 @@ Override this to your own value for mocking out shell calls in tests.")
     (define-key map (kbd "r") 'daemons-reload-at-point)
     (define-key map (kbd "e") 'daemons-enable-at-point)
     (define-key map (kbd "d") 'daemons-disable-at-point)
+    (define-key map (kbd "j") 'daemons-journal-at-point)
     (define-key map (kbd "u") 'daemons-systemd-toggle-user)
     map)
   "Keymap for daemons mode.")
@@ -319,7 +320,9 @@ The optional \\='status-line entry differs: its function takes a daemon
 name and returns the one-line status itself (see `daemons-status-line').
 So does the optional \\='journal entry: its function takes a daemon name
 and starts a process that follows the daemon's journal in the current
-buffer, which is in `daemons-journal-mode' (see `daemons-journal').  The
+buffer, which is in `daemons-journal-mode' (see `daemons-journal');
+its filter and sentinel should end in `daemons--journal-insert' and
+`daemons--journal-sentinel', which scroll the buffer and note the end.  The
 optional \\='journal-target function takes a daemon name and returns
 what its journal follows, e.g. a normalised unit name and scope, so that
 names for the same journal share a buffer."
