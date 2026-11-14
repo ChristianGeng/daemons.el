@@ -113,6 +113,7 @@ Its header is the daemon's one-line status; it offers only the actions
 the init system supports, with the keys of the daemons list.  Control
 actions keep the menu open and redraw the header."
   (interactive (list (daemons--completing-read)))
+  (unless name (user-error "No daemon at point"))
   (setq daemons--dispatch-name name
         daemons--dispatch-submodule (daemons-init-system-submodule))
   (daemons-dispatch-menu))
