@@ -80,6 +80,13 @@ See `daemons-define-submodule' for how to implement your own."
   :type 'boolean
   :group 'daemons)
 
+(defcustom daemons-dispatch-on-ret t
+  "Whether `RET' in the daemons list opens `daemons-dispatch'.
+It does only when transient is available, as in Emacs 28 and later;
+otherwise, and when this is nil, `RET' shows the daemon's status."
+  :type 'boolean
+  :group 'daemons)
+
 (defcustom daemons-command-output 'echo
   "Where start, stop, restart, reload, enable and disable show their result.
 With `echo', the echo area shows the daemon's one-line status afterwards
@@ -127,7 +134,7 @@ Override this to your own value for mocking out shell calls in tests.")
 
 (defvar daemons-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "RET") 'daemons-status-at-point)
+    (define-key map (kbd "RET") 'daemons-dispatch-or-status-at-point)
     (define-key map (kbd "s") 'daemons-start-at-point)
     (define-key map (kbd "S") 'daemons-stop-at-point)
     (define-key map (kbd "R") 'daemons-restart-at-point)
@@ -142,6 +149,8 @@ Override this to your own value for mocking out shell calls in tests.")
 (defvar daemons-output-mode-map
   (let ((map (copy-keymap daemons-mode-map)))
     (define-key map [remap revert-buffer] 'daemons-status-at-point)
+    ;; RET opens the menu only in the list; here it shows the status again.
+    (define-key map (kbd "RET") 'daemons-status-at-point)
     map)
   "Keymap for daemons output mode.")
 
@@ -440,8 +449,10 @@ The car of each pair is the command symbol (e.g. \\='stop).
 The cdr of each pair is a function taking a daemon name and returning a shell
 command to execute.
 
-e.g. \\='((start . (lambda (x) (format \"service %s start\" (shell-quote-argument x))))
-       (stop . (lambda (x) (format \"service %s stop\" (shell-quote-argument x)))))
+e.g. \\='((start . (lambda (x)
+                    (format \"service %s start\" (shell-quote-argument x))))
+       (stop . (lambda (x)
+                 (format \"service %s stop\" (shell-quote-argument x)))))
 
 The optional \\='status-line entry differs: its function takes a daemon
 name and returns the one-line status itself (see `daemons-status-line').
@@ -490,6 +501,18 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show the status of the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
   (daemons--run-with-output-buffer 'status name))
+
+(declare-function daemons-dispatch "daemons-dispatch" (name))
+
+(defun daemons-dispatch-or-status-at-point (name)
+  "Open the menu for the daemon NAME at point, or show its status.
+See `daemons-dispatch-on-ret'."
+  (interactive (list (daemons--daemon-at-point)))
+  (if (and daemons-dispatch-on-ret
+           ;; Also when daemons-dispatch.el is there but transient is not.
+           (condition-case nil (require 'daemons-dispatch) (error nil)))
+      (daemons-dispatch name)
+    (daemons-status-at-point name)))
 
 (defun daemons-status-line-at-point (name)
   "Show a one-line status of the daemon NAME at point and return it."
