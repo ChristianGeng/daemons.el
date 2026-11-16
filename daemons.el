@@ -189,9 +189,43 @@ the local user and host, which is root with `daemons-always-sudo'."
   (let ((target (daemons--command 'journal-target (daemons-init-system-submodule))))
     (format "*daemons-journal %s for %s*"
             (if target (funcall target name) name)
-            (or (file-remote-p default-directory)
-                (daemons--get-user-and-hostname
-                 (if daemons-always-sudo "/sudo::" default-directory))))))
+            (cond ((daemons--local-sudo-p default-directory)
+                   ;; Whatever this host is called in the directory.
+                   (format "%s@%s" (or (file-remote-p default-directory 'user) "root")
+                           (system-name)))
+                  ((daemons--tramp-prefix default-directory))
+                  (daemons-always-sudo (format "root@%s" (system-name)))
+                  (t (daemons--get-user-and-hostname default-directory))))))
+
+(defun daemons--local-name (file)
+  "Return FILE without its TRAMP prefix, like `file-local-name' of Emacs 26."
+  (or (file-remote-p file 'localname) file))
+
+(defun daemons--tramp-prefix (dir)
+  "Return the whole TRAMP prefix of DIR, every hop of it, or nil if local.
+Unlike `file-remote-p', which gives only the last hop of a multi-hop
+name such as /ssh:me@gw|ssh:me@host:/tmp/."
+  (let ((localname (file-remote-p dir 'localname)))
+    (when localname
+      (substring dir 0 (- (length dir) (length localname))))))
+
+(defun daemons--local-sudo-p (dir)
+  "Return non-nil if DIR is a sudo directory on this host, e.g. /sudo::/tmp/.
+Such a directory, as `daemons-always-sudo' makes, names the local host.
+Only a single sudo, doas or su hop counts: an ssh connection, also to
+localhost on some port or through a gateway, is another machine."
+  (let ((prefix (daemons--tramp-prefix dir)))
+    (and prefix
+         (string-match-p "\\`/\\(?:sudo\\|doas\\|su\\):[^:|]*:\\'" prefix)
+         (member (file-remote-p dir 'host) (list (system-name) "localhost" "")))))
+
+(defun daemons--sudo-directory ()
+  "Become root with `daemons--sudo' if `daemons-always-sudo' is set.
+Return the directory it made, which the caller must remove, or nil."
+  (when daemons-always-sudo
+    (let ((dir default-directory))
+      (daemons--sudo)
+      (unless (equal dir default-directory) default-directory))))
 
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
@@ -241,14 +275,13 @@ active."
 
 (defun daemons--run-and-echo (command daemon-name)
   "Run COMMAND on DAEMON-NAME and return what to say in the echo area.
-See `daemons-command-output'.  Output of more than one line goes to the
-output buffer instead, and the return value is nil.  The command's output comes first, then
+See `daemons-command-output'.  The command's output comes first, then
 the daemon's one-line status; a failure to get that status is shown in
-its place.  Return the message."
+its place.  Output of more than one line goes to the output buffer
+instead, and the return value is nil."
   (let* ((exit nil)
          (output (with-temp-buffer
-                   (let ((dir default-directory))
-                     (when daemons-always-sudo (daemons--sudo))
+                   (let ((sudo-directory (daemons--sudo-directory)))
                      (unwind-protect
                          (let ((fun (or (daemons--command command (daemons-init-system-submodule))
                                         (error "No such daemon command: %s" command))))
@@ -256,9 +289,9 @@ its place.  Return the message."
                            (setq exit (funcall daemons--process-shell-command-fun
                                                (funcall fun daemon-name) nil t))
                            (string-trim (buffer-string)))
-                       (unless (equal dir default-directory)
-                         (delete-directory (or (file-remote-p default-directory 'localname)
-                                               default-directory)))))))
+                       (when sudo-directory
+                         (ignore-errors
+                           (delete-directory (daemons--local-name sudo-directory))))))))
          (failed (and (integerp exit) (/= exit 0)))
          (status-line (daemons--command 'status-line (daemons-init-system-submodule))))
     (if (string-match-p "\n" output)
@@ -406,8 +439,8 @@ The car of each pair is the command symbol (e.g. \\='stop).
 The cdr of each pair is a function taking a daemon name and returning a shell
 command to execute.
 
-e.g. \\='((start . (lambda (x) (format \"service %s start\" x)))
-       (stop . (lambda (x) (format \"service %s stop\" x))))
+e.g. \\='((start . (lambda (x) (format \"service %s start\" (shell-quote-argument x))))
+       (stop . (lambda (x) (format \"service %s stop\" (shell-quote-argument x)))))
 
 The optional \\='status-line entry differs: its function takes a daemon
 name and returns the one-line status itself (see `daemons-status-line').
@@ -520,13 +553,14 @@ Signal a `user-error' if the submodule has none."
   "Return the one-line status of daemon NAME from the function STATUS-LINE.
 With `daemons-always-sudo' it runs as root."
   (with-temp-buffer
-    (let ((dir default-directory))
-      (when daemons-always-sudo (daemons--sudo))
+    (let ((sudo-directory (daemons--sudo-directory)))
       (unwind-protect (funcall status-line name)
-        ;; Remove the directory `daemons--sudo' made for this call.
-        (unless (equal dir default-directory)
-          (delete-directory (or (file-remote-p default-directory 'localname)
-                                    default-directory)))))))
+        ;; Remove only the directory `daemons--sudo' made for this call,
+        ;; wherever STATUS-LINE left us, and not to replace the result,
+        ;; or the real error, if it is gone already.
+        (when sudo-directory
+          (ignore-errors
+            (delete-directory (daemons--local-name sudo-directory))))))))
 
 ;; journal
 (defvar-local daemons--journal-sudo-directory nil
@@ -572,7 +606,7 @@ Also remove the directory `daemons--sudo' made for the buffer."
     (when process (delete-process process)))
   (when daemons--journal-sudo-directory
     (ignore-errors
-      (delete-directory (file-local-name daemons--journal-sudo-directory)))))
+      (delete-directory (daemons--local-name daemons--journal-sudo-directory)))))
 
 ;;;###autoload
 (defun daemons-journal (name)
@@ -591,13 +625,15 @@ viewer.  Return the buffer of the default viewer."
         (unless (process-live-p (get-buffer-process buffer))
           (unless (derived-mode-p 'daemons-journal-mode) (daemons-journal-mode))
           (let ((inhibit-read-only t)) (erase-buffer))
-          (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
-            (let ((dir default-directory))
-              (daemons--sudo)
-              (unless (equal dir default-directory)
-                (setq daemons--journal-sudo-directory default-directory))))
           (condition-case err
-              (funcall journal name)
+              (progn
+                (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
+                  (let ((dir default-directory))
+                    (daemons--sudo)
+                    (unless (equal dir default-directory)
+                      (setq daemons--journal-sudo-directory default-directory))))
+                (funcall journal name))
+            ;; Killing the buffer also removes the sudo directory.
             (error (kill-buffer buffer)
                    (signal (car err) (cdr err))))))
       (pop-to-buffer buffer)

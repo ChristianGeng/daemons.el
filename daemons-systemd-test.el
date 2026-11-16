@@ -251,9 +251,22 @@ Return the fontified buffer text and the command that was run."
                     ("my-status-wrapper foo"
                      . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; my-status-wrapper foo")
                     ("cd /tmp && my-status-wrapper foo"
-                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; cd /tmp && my-status-wrapper foo")))
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; cd /tmp && my-status-wrapper foo")
+                    ;; A systemctl that is only an argument is left alone.
+                    ("test -x /bin/systemctl && systemctl status foo"
+                     . "test -x /bin/systemctl && env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
+                    ("ls /etc/systemctl.d && systemctl status foo"
+                     . "ls /etc/systemctl.d && env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
+                    ("echo systemctl; systemctl status foo"
+                     . "echo systemctl; env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
+                    ("systemctl-wrapper foo"
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; systemctl-wrapper foo")))
       (let ((daemons-systemctl-command-fn (lambda (_command _service) (car case))))
-        (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))))))
+        (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))
+        ;; Independent of the syntax table of the buffer it runs in.
+        (with-temp-buffer
+          (special-mode)
+          (should (equal (cdr case) (daemons-systemd--status-cmd "foo"))))))))
 
 (ert-deftest systemd-status-colours-failed-unit-test ()
   (pcase-let ((`(,text ,command)
@@ -428,16 +441,23 @@ A local /sudo:: directory, as from `daemons-always-sudo', is not remote."
   "The journal follows in an async process in `default-directory'."
   (let ((daemons-systemd-color nil)
         (daemons-systemd-is-user t)
-        (args nil))
-    (cl-letf (((symbol-function 'make-process)
-               (lambda (&rest plist) (setq args plist) 'process)))
+        (args nil)
+        (start-file-process (symbol-function 'start-file-process)))
+    (cl-letf (((symbol-function 'start-file-process)
+               (lambda (name buffer &rest command)
+                 (setq args (list buffer command process-connection-type))
+                 (funcall start-file-process name buffer "true"))))
       (with-temp-buffer
-        (should (eq 'process (daemons-systemd--journal "foo")))
-        (should (eq (current-buffer) (plist-get args :buffer)))
-        (should (equal '("journalctl" "--user" "--no-pager" "-f" "-u" "foo.service")
-                       (plist-get args :command)))
-        (should (plist-get args :file-handler))
-        (should (eq #'daemons-systemd--journal-filter (plist-get args :filter)))))))
+        (let ((process (daemons-systemd--journal "foo")))
+          (should (processp process))
+          (should (equal (list (current-buffer)
+                               '("journalctl" "--user" "--no-pager" "-f" "-u" "foo.service")
+                               nil)
+                         args))
+          (should (eq #'daemons-systemd--journal-filter (process-filter process)))
+          (should (eq #'daemons-systemd--journal-sentinel (process-sentinel process)))
+          (should-not (process-query-on-exit-flag process))
+          (delete-process process))))))
 
 (ert-deftest systemd-journal-is-a-command-test ()
   (should (eq 'daemons-systemd--journal (daemons--command 'journal 'daemons-systemd)))
@@ -531,16 +551,14 @@ A printf stands in for journalctl."
         (daemons-systemd-is-user t)
         (daemons-journal-function nil)
         (daemons-always-sudo nil)
-        (make-process (symbol-function 'make-process))
+        (start-file-process (symbol-function 'start-file-process))
         (commands nil))
     (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd))
-              ((symbol-function 'make-process)
-               (lambda (&rest plist)
-                 (push (plist-get plist :command) commands)
-                 (apply make-process
-                        (plist-put plist :command
-                                   (list "printf" "%s"
-                                         daemons-systemd-test--journal-output))))))
+              ((symbol-function 'start-file-process)
+               (lambda (name buffer &rest command)
+                 (push command commands)
+                 (funcall start-file-process name buffer
+                          "printf" "%s" daemons-systemd-test--journal-output))))
       (let* ((buffer (save-current-buffer (daemons-journal "foo")))
              (process (get-buffer-process buffer)))
         (unwind-protect
@@ -554,3 +572,135 @@ A printf stands in for journalctl."
                                (mapcar #'car (daemons-systemd-test--journal-faces))))
                 (should (string-suffix-p "-- journalctl finished --\n" (buffer-string)))))
           (kill-buffer buffer))))))
+
+(ert-deftest systemd-list-alias-shows-unit-state-test ()
+  "An alias shows the state of its unit, from one systemctl show call."
+  (let* ((daemons-systemd-color nil)
+         (daemons-systemd-is-user nil)
+         (commands nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd)
+            (push cmd commands)
+            (cond ((string-match-p "list-unit-files" cmd) "
+bluetooth.service          enabled
+dbus-org.bluez.service     alias
+chronyd.service            alias
+getty@.service             static
+autovt@.service            alias")
+                  ((string-match-p "list-units" cmd) "
+  bluetooth.service   loaded active running Bluetooth service
+  chrony.service      loaded failed failed  NTP")
+                  ((string-match-p " show -p Id " cmd)
+                   "Id=bluetooth.service\n\nId=chrony.service\n")
+                  (t (error "Unexpected command %s" cmd))))))
+    (should (equal '(("bluetooth" ["bluetooth" "enabled" "running"])
+                     ("dbus-org.bluez" ["dbus-org.bluez" "alias" "running"])
+                     ("chronyd" ["chronyd" "alias" "failed"]))
+                   (daemons-systemd--list)))
+    ;; Templates are not asked about: systemctl show rejects them.
+    (should (equal "systemctl show -p Id dbus-org.bluez.service chronyd.service"
+                   (seq-find (lambda (cmd) (string-match-p " show " cmd)) commands)))
+    (should (= 3 (length commands)))))
+
+(ert-deftest systemd-list-without-aliases-makes-no-show-call-test ()
+  (let* ((daemons-systemd-color nil)
+         (daemons-systemd-is-user nil)
+         (commands nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd) (push cmd commands)
+            (if (string-match-p "list-unit-files" cmd)
+                "foo.service enabled"
+              "  foo.service loaded active running Foo"))))
+    (daemons-systemd--list)
+    (should (= 2 (length commands)))))
+
+(ert-deftest systemd-list-alias-show-fails-test ()
+  "If systemctl show does not resolve the aliases, they show inactive."
+  (let* ((daemons-systemd-color nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd)
+            (cond ((string-match-p "list-unit-files" cmd) "dbus-org.bluez.service alias")
+                  ((string-match-p "list-units" cmd)
+                   "  bluetooth.service loaded active running Bluetooth")
+                  (t "Failed to connect to bus")))))
+    (should (equal '(("dbus-org.bluez" ["dbus-org.bluez" "alias" "inactive"]))
+                   (daemons-systemd--list)))))
+
+(ert-deftest systemd-list-alias-show-stops-early-test ()
+  "Aliases before one systemctl show rejects are still resolved."
+  (let* ((daemons-systemd-color nil)
+         (daemons-systemd-is-user nil)
+         (daemons--shell-command-to-string-fun
+          (lambda (cmd)
+            (cond ((string-match-p "list-unit-files" cmd)
+                   "dbus-org.bluez.service alias\nweird.service alias")
+                  ((string-match-p "list-units" cmd)
+                   "  bluetooth.service loaded active running Bluetooth")
+                  (t "Id=bluetooth.service\nFailed to get properties: weird")))))
+    (should (equal '(("dbus-org.bluez" ["dbus-org.bluez" "alias" "running"])
+                     ("weird" ["weird" "alias" "inactive"]))
+                   (daemons-systemd--list)))))
+
+(ert-deftest systemd-eldoc-quotes-service-test ()
+  "The eldoc lookup passes a service name with shell syntax as one argument."
+  (let ((command nil))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (cmd) (setq command cmd) "Description=Foo\n")))
+      (should (equal "Foo" (daemons--systemd-documentation-for "a b;echo $HOME")))
+      (should (equal (format "systemctl show %s --no-pager"
+                             (shell-quote-argument "a b;echo $HOME"))
+                     command)))))
+
+(ert-deftest systemd-list-ignores-colour-escapes-test ()
+  "Output coloured by SYSTEMD_COLORS in the environment still parses."
+  (let* ((daemons-systemd-color nil)
+         (red (lambda (s) (concat "\e[0;1;31m" s "\e[0m")))
+         (daemons--shell-command-to-string-fun
+          (daemons-systemd-test--list-command-fun
+           (concat "auditd.service " "\e[0;1;32menabled\e[0m" "\n")
+           (concat (funcall red "●") (funcall red " ") (funcall red "auditd.service")
+                   (funcall red " ") "loaded " (funcall red "failed") (funcall red " ")
+                   (funcall red "failed") (funcall red " ") "Security Auditing Service\n"))))
+    (should (equal '(("auditd" ["auditd" "enabled" "failed"]))
+                   (daemons-systemd--list)))))
+
+(ert-deftest systemd-journal-buffer-name-from-sudo-directory-test ()
+  "With `daemons-always-sudo', a root journal has one buffer name, from wherever."
+  (let ((daemons-always-sudo t)
+        (daemons-systemd-is-user nil))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-systemd)))
+      (should (equal (let ((default-directory "/tmp/"))
+                       (daemons--get-journal-buffer-name "foo"))
+                     (let ((default-directory "/sudo::/tmp/abc/"))
+                       (daemons--get-journal-buffer-name "foo"))))
+      ;; However the local host is written, one local root journal.
+      (should (equal (let ((default-directory "/sudo::/tmp/"))
+                       (daemons--get-journal-buffer-name "foo"))
+                     (let ((default-directory "/sudo:root@localhost:/tmp/"))
+                       (daemons--get-journal-buffer-name "foo"))))
+      ;; ssh tunnels to localhost on different ports are different machines.
+      (should-not (equal (let ((default-directory "/ssh:me@localhost#2222:/tmp/"))
+                           (daemons--get-journal-buffer-name "foo"))
+                         (let ((default-directory "/ssh:me@localhost#2223:/tmp/"))
+                           (daemons--get-journal-buffer-name "foo"))))
+      ;; Multi-hop: every hop names the journal, and a sudo hop behind a
+      ;; gateway is not this host.
+      (should-not (equal (let ((default-directory "/ssh:a@g1|ssh:b@g2:/tmp/"))
+                           (daemons--get-journal-buffer-name "foo"))
+                         (let ((default-directory "/ssh:c@g3|ssh:b@g2:/tmp/"))
+                           (daemons--get-journal-buffer-name "foo"))))
+      (should (string-match-p "for /ssh:alice@gw|sudo:localhost:\\*\\'"
+                              (let ((default-directory "/ssh:alice@gw|sudo:localhost:/tmp/"))
+                                (daemons--get-journal-buffer-name "foo"))))
+      ;; A remote host keeps its full TRAMP prefix.
+      (should (string-match-p "for /ssh:host:\\*\\'"
+                              (let ((default-directory "/ssh:host:/tmp/"))
+                                (daemons--get-journal-buffer-name "foo")))))))
+
+(ert-deftest systemd-status-line-shows-bad-load-state-test ()
+  "A unit file that failed to load does not read like a stopped unit."
+  (let ((daemons-systemd-color nil)
+        (daemons--shell-command-to-string-fun
+         (lambda (_) "LoadState=error\nActiveState=inactive\nSubState=dead\nUnitFileState=\nActiveEnterTimestamp=n/a\n")))
+    (should (equal "foo.service: error, inactive (dead)"
+                   (daemons-systemd--status-line "foo")))))

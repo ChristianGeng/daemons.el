@@ -66,15 +66,17 @@
 
 
 (ert-deftest daemons--command-test ()
-  (let ((expected  (lambda () "let's go already")))
-    (daemons-define-submodule daemons-command-test
-      "Test: commands submodule"
-      :test t
-      :commands '((stop . (lambda () "plz stop"))
-                    (start . (lambda () "let's go already")))
-      :headers []
-      :list nil)
-    (should (equal expected (daemons--command 'start 'daemons-command-test)))))
+  (daemons-define-submodule daemons-command-test
+    "Test: commands submodule"
+    :test t
+    :commands '((stop . (lambda () "plz stop"))
+                (start . (lambda () "let's go already")))
+    :headers []
+    :list nil)
+  ;; Compare what the command returns: from Emacs 30 an interpreted
+  ;; closure is not `equal' to the list it was written as.
+  (should (equal "let's go already"
+                 (funcall (daemons--command 'start 'daemons-command-test)))))
 
 (ert-deftest daemons--list-headers-test ()
   (let ((expected [("Daemon name" 80 t)
@@ -613,6 +615,73 @@ The directory `daemons--sudo' makes is reused for the buffer and removed with it
     (should (get-buffer (daemons--get-output-buffer-name
                          (daemons--get-user-and-hostname default-directory))))
     (should (equal "down" (daemons-test--row-state list-buffer "foo")))))
+
+;; quoting tests
+(ert-deftest daemons-commands-quote-daemon-name-test ()
+  "Every submodule passes a daemon name with shell syntax as one argument."
+  (let ((name "a b;echo $HOME")
+        (daemons-systemd-color nil)
+        (daemons-systemctl-command-fn #'daemons-systemctl-cmd))
+    (dolist (submodule '(daemons-systemd daemons-sysvinit daemons-brew
+                         daemons-shepherd daemons-openrc))
+      (require submodule)
+      (dolist (command '(status start stop restart reload enable disable))
+        (let ((fun (daemons--command command submodule)))
+          (when fun
+            (let ((cmd (funcall fun name)))
+              (should (string-match-p (regexp-quote (shell-quote-argument name)) cmd))
+              ;; In a real shell the name is one argument and nothing else runs.
+              (let ((words (split-string
+                            (shell-command-to-string
+                             (concat "printf '[%s]\\n' "
+                                     (substring cmd (1+ (string-match " " cmd)))))
+                            "\n" t)))
+                (should (member (format "[%s]" name) words))
+                (should-not (member (format "[%s]" (getenv "HOME")) words))
+                ;; Nor as output of its own, e.g. after "; echo".
+                (should-not (member (getenv "HOME") words))))))))))
+
+(ert-deftest daemons-systemctl-cmd-without-service-test ()
+  "An empty service, as for daemon-reload, is left out rather than quoted."
+  (let ((daemons-systemd-is-user t))
+    (should (equal "systemctl --user daemon-reload"
+                   (daemons-systemctl-cmd "daemon-reload" "")))))
+
+(ert-deftest daemons-journal-sudo-failure-kills-buffer-test ()
+  "If becoming root fails, no half-made journal buffer is left."
+  (daemons-test--with-journal
+    (let ((daemons-always-sudo t))
+      (cl-letf (((symbol-function 'daemons--sudo) (lambda () (error "mktemp failed"))))
+        (should-error (daemons-journal "foo"))
+        (should-not (get-buffer (daemons--get-journal-buffer-name "foo")))))))
+
+(ert-deftest daemons-status-line-removes-only-sudo-directory-test ()
+  "A status line that changes `default-directory' does not get it removed."
+  (let ((other (make-temp-file "daemons-other" t))
+        (daemons-always-sudo nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-cd-status-line-test))
+                  ((symbol-function 'message) #'ignore))
+          (daemons-define-submodule daemons-cd-status-line-test
+            "Test: status line that changes directory"
+            :test t
+            :commands `((status-line . (lambda (name)
+                                         (setq default-directory ,(file-name-as-directory other))
+                                         (concat name ": up"))))
+            :headers []
+            :list nil)
+          (should (equal "foo: up" (daemons-status-line "foo")))
+          (should (file-directory-p other)))
+      (when (file-directory-p other) (delete-directory other)))))
+
+(ert-deftest daemons-status-line-sudo-directory-gone-test ()
+  "If the sudo directory is gone already, the status line is still returned."
+  (let ((daemons-always-sudo t))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-status-line-test))
+              ((symbol-function 'daemons--sudo)
+               (lambda () (setq default-directory "/tmp/daemons-gone-already-xyz/")))
+              ((symbol-function 'message) #'ignore))
+      (should (equal "foo: up" (daemons-status-line "foo"))))))
 
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
