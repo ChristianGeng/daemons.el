@@ -620,6 +620,16 @@ Signal a `user-error' if the submodule has none."
 
 (put 'daemons--edit-make-directory 'permanent-local-hook t)
 
+(defun daemons--find-file-noselect (file)
+  "Visit FILE like `find-file-noselect', also when its directory is missing.
+Then `find-file-not-found-functions' are not run: some, like Doom's,
+offer to create the directory at once, which saving the buffer here
+does anyway, and only if it is saved."
+  (if (file-directory-p (file-name-directory file))
+      (find-file-noselect file)
+    (let ((find-file-not-found-functions nil))
+      (find-file-noselect file))))
+
 (defun daemons--edit-saved ()
   "Run `daemons--edit-saved-command' and say so in the echo area.
 It runs in the buffer's directory, so on the host of the file and as
@@ -643,7 +653,7 @@ if needed, then runs the submodule's follow-up, for systemd
   (let* ((submodule (daemons-init-system-submodule))
          (setup (daemons--command 'edit-setup submodule))
          (saved (daemons--command 'edit-saved submodule))
-         (buffer (find-file-noselect (funcall (daemons--edit-command) name))))
+         (buffer (daemons--find-file-noselect (funcall (daemons--edit-command) name))))
     (with-current-buffer buffer
       ;; Before the buffer-local settings, which a new major mode would reset.
       (when setup (funcall setup name))
@@ -707,7 +717,7 @@ config with its TRAMP prefix."
                  (set-file-modes file (logior (file-modes file) #o200))
                  (message "Copied %s to %s" seed file))
         (message "%s is missing and so is %s to copy it from" file seed)))
-    (let ((buffer (find-file-noselect file)))
+    (let ((buffer (daemons--find-file-noselect file)))
       (with-current-buffer buffer
         ;; A new file in a missing directory opens read-only.
         (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))

@@ -515,6 +515,27 @@ In BODY, `dir' is that directory and `commands' the shell commands run."
     (should (file-exists-p daemons-test--edit-file))
     (should (member "Ran `reload foo'" messages))))
 
+(ert-deftest daemons-edit-missing-directory-asks-nothing-test ()
+  "Opening a file in a missing directory runs no not-found hooks, such as
+Doom's offer to create the directory; saving creates it."
+  (daemons-test--with-edit
+    (let ((find-file-not-found-functions
+           (list (lambda () (ert-fail "a not-found hook ran")))))
+      (with-current-buffer (daemons-edit "foo")
+        (should-not (file-directory-p (file-name-directory daemons-test--edit-file)))
+        (insert "x=1\n")
+        (save-buffer)))
+    (should (file-exists-p daemons-test--edit-file))))
+
+(ert-deftest daemons-edit-existing-directory-keeps-hooks-test ()
+  "With the directory there, `find-file-not-found-functions' run as usual."
+  (daemons-test--with-edit
+    (make-directory (file-name-directory daemons-test--edit-file) t)
+    (let* ((ran nil)
+           (find-file-not-found-functions (list (lambda () (setq ran t) nil))))
+      (daemons-edit "foo")
+      (should ran))))
+
 (ert-deftest daemons-edit-at-point-test ()
   (daemons-test--with-edit
     (with-temp-buffer
