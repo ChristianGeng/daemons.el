@@ -21,6 +21,8 @@
 ;;; Code:
 (require 'seq)
 (require 'daemons)
+;; string-suffix-p and friends at run time, not autoloaded before Emacs 28.
+(require 'subr-x)
 
 (defcustom daemons-systemd-is-user nil
   "Determines if we want to run commands as `--user'"
@@ -31,7 +33,8 @@
   "Function used to return string systemctl commands suitable for `shell-command'.
 
 It should take two string input arguments, denoting the desired systemctl
-command, and the service to run the command with.
+command, and the service to run the command with.  The command may be
+several words, such as \"show -p LoadState,ActiveState\".
 
 The default value for this user option will respect the value of
 `daemons-systemd-is-user'.  In order to also do this for any custom value of
@@ -150,21 +153,35 @@ service.  Both should be strings.
 (defconst daemons-systemd--colour-vars "SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0"
   "Environment that makes systemctl colour its output.")
 
+(defconst daemons-systemd--systemctl-command-regexp
+  (let ((word "[^ \t;&|()]+"))
+    (concat
+     ;; The start of a command: of the string, or after ; & | or (.
+     "\\(?:\\`\\|[;&|(]\\)[ \t]*"
+     ;; An optional sudo or doas with its options and their arguments.
+     "\\(?:\\(?:" word "/\\)?\\(?:sudo\\|doas\\)"
+     "\\(?:[ \t]+" word "\\)*?[ \t]+\\)?"
+     ;; systemctl itself, possibly with a directory, as a whole word.
+     "\\(\\(?:" word "/\\)?systemctl\\)\\(?:[ \t]\\|\\'\\)"))
+  "Regexp for a systemctl that runs as a command; group 1 is the systemctl.")
+
 (defun daemons-systemd--status-cmd (service)
   "Return the shell command that shows the status of SERVICE.
 With `daemons-systemd-color', systemctl is asked for colours so that
 `daemons-systemd--mark-journal-errors' can find journal lines of priority
-err and above.  The variables are set by `env' right before the systemctl
-word, so they survive a wrapper such as sudo, which drops the caller's
-environment.  A command without that word gets them exported first, which
-keeps shell builtins and compound commands working."
-  (let ((cmd (funcall daemons-systemctl-command-fn "status" service)))
+err and above.  The variables are set by `env' right before the first
+systemctl that runs as a command, so they survive a wrapper such as sudo,
+which drops the caller's environment.  A systemctl elsewhere, such as an
+argument of `test -x', is left alone.  A command without such a systemctl
+gets them exported first, which keeps shell builtins and compound
+commands working."
+  (let ((cmd (funcall daemons-systemctl-command-fn "status" service))
+        (case-fold-search nil))
     (cond ((not daemons-systemd-color) cmd)
-          ((string-match "\\(?:^\\|[ \t]\\)\\([^ \t]*/\\)?systemctl\\_>" cmd)
-           (let ((start (or (match-beginning 1)
-                            (- (match-end 0) (length "systemctl")))))
-             (concat (substring cmd 0 start) "env " daemons-systemd--colour-vars
-                     " " (substring cmd start))))
+          ((string-match daemons-systemd--systemctl-command-regexp cmd)
+           (concat (substring cmd 0 (match-beginning 1))
+                   "env " daemons-systemd--colour-vars " "
+                   (substring cmd (match-beginning 1))))
           (t (concat "export " daemons-systemd--colour-vars "; " cmd)))))
 
 (defconst daemons-systemd--status-font-lock-keywords
@@ -266,15 +283,15 @@ an escape split between two outputs is still found."
 (defun daemons-systemd--journal (name)
   "Follow the journal of the systemd unit NAME in the current buffer.
 journalctl runs in `default-directory', so on a remote host or as root
-if that is a TRAMP directory."
-  (make-process :name "journalctl"
-                :buffer (current-buffer)
-                :command (daemons-systemd--journal-command name)
-                :connection-type 'pipe
-                :noquery t
-                :file-handler t
-                :filter #'daemons-systemd--journal-filter
-                :sentinel #'daemons-systemd--journal-sentinel))
+if that is a TRAMP directory: `start-file-process' honours that on every
+supported Emacs, where `make-process' needs Emacs 27 for it."
+  (let* ((process-connection-type nil)  ; a pipe, not a pty
+         (process (apply #'start-file-process "journalctl" (current-buffer)
+                         (daemons-systemd--journal-command name))))
+    (set-process-query-on-exit-flag process nil)
+    (set-process-filter process #'daemons-systemd--journal-filter)
+    (set-process-sentinel process #'daemons-systemd--journal-sentinel)
+    process))
 
 (defconst daemons-systemd--status-line-properties
   "LoadState,ActiveState,SubState,UnitFileState,ActiveEnterTimestamp"
@@ -359,6 +376,10 @@ other.  The state is coloured if `daemons-systemd-color' is set."
          (let ((time (and (string= active "active")
                           (daemons-systemd--status-line-time since))))
            (concat
+            ;; A unit file that failed to load, or is masked, would
+            ;; otherwise read like a cleanly stopped unit.
+            (unless (or (member load '("loaded" "")) (equal load file))
+              (concat (daemons-systemd--status-line-colour 'daemons-systemd-bad load) ", "))
             (daemons-systemd--status-line-colour
              (daemons-systemd--status-line-face active)
              (format "%s (%s)" active sub))
@@ -422,6 +443,16 @@ that is the normal state between runs."
         (propertize state 'font-lock-face face)
       state)))
 
+(defun daemons-systemd--list-output (command)
+  "Return the lines of the systemctl COMMAND for the list, without escapes.
+systemctl colours its output when SYSTEMD_COLORS is set in the
+environment, here or on a remote host, which would break the parsing."
+  (daemons--split-lines
+   (replace-regexp-in-string
+    daemons-systemd--escape-regexp ""
+    (daemons--shell-command-to-string
+     (format "%s %s" (daemons-systemd--cmd) command)))))
+
 (defun daemons-systemd--active-states ()
   "Return a hash table of the short active state of each loaded service.
 The keys are unit names such as \"foo.service\".  Return nil if
@@ -429,10 +460,8 @@ The keys are unit names such as \"foo.service\".  Return nil if
 \"Failed to connect to bus\": then the states are unknown."
   (let ((states (make-hash-table :test 'equal))
         (other-output nil))
-    (dolist (line (daemons--split-lines
-                   (daemons--shell-command-to-string
-                    (format "%s list-units --type=service --all --no-legend"
-                            (daemons-systemd--cmd)))))
+    (dolist (line (daemons-systemd--list-output
+                   "list-units --type=service --all --no-legend"))
       (let ((parts (split-string line)))
         ;; Failed and not-found units are marked with a bullet.
         (when (member (car parts) '("\u25cf" "*"))
@@ -450,9 +479,7 @@ Each item is (NAME [NAME ENABLED ACTIVE]).  Units that `systemctl
 list-units' does not report have never been loaded; they are inactive.
 If that call fails, ACTIVE is \"unknown\"."
   (let ((states (daemons-systemd--active-states)))
-    (thread-last  (format "%s list-unit-files --type=service --no-legend" (daemons-systemd--cmd))
-      (daemons--shell-command-to-string)
-      (daemons--split-lines)
+    (thread-last (daemons-systemd--list-output "list-unit-files --type=service --no-legend")
       (seq-map (lambda (line)
                  (let ((item (daemons-systemd--parse-list-item line))
                        (state (if states

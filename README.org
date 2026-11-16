@@ -52,7 +52,7 @@ To watch a unit's journal as it grows, =M-x daemons-journal= (or =daemons-journa
 (setq daemons-journal-function
       (lambda (unit)
         (journalctl--follow (append (when daemons-systemd-is-user '("--user"))
-                                    (list "-u" unit)))))
+                                    (list "--lines=100" "-f" "-u" unit)))))
 #+end_src
 
 It looks something like this for systemd:
