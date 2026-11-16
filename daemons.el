@@ -36,7 +36,9 @@
 
 ;; Fix for Emacs 27 byte compilation errors relating to thread-last. See:
 ;; https://github.com/cbowdon/daemons.el/issues/10#issuecomment-392261477
-(eval-when-compile (require 'subr-x))
+;; Also needed at run time: before Emacs 28 nothing autoloads string-trim
+;; and its relatives.
+(require 'subr-x)
 
 ;; customization
 (defgroup daemons nil
@@ -98,6 +100,17 @@ FILE and SEED may be TRAMP file names."
                                      (file :tag "Copy from if missing")))))
   :group 'daemons)
 
+(defcustom daemons-command-output 'echo
+  "Where start, stop, restart, reload, enable and disable show their result.
+With `echo', the echo area shows the daemon's one-line status afterwards
+(see `daemons-status-line'), after any one-line output of the command,
+such as an error; output of more than one line still goes to the output
+buffer.  With `buffer', the output buffer shows the output, as status
+does.  Either way the list of daemons is refreshed afterwards."
+  :type '(choice (const :tag "Echo area" echo)
+                 (const :tag "Output buffer" buffer))
+  :group 'daemons)
+
 (defcustom daemons-show-output-in-minibuffer nil
   "If non-nil, all output will be shown in the minibuffer."
   :type 'boolean
@@ -119,6 +132,11 @@ sudo."
   "Contains a `shell-command' function.
 
 Override this to your own value for mocking out shell calls in tests.")
+
+(defvar daemons--process-shell-command-fun 'process-file-shell-command
+  "Contains a `process-file-shell-command' function.
+Start, stop and the other state-changing commands run through it, as it
+returns the exit status.  Override it for mocking out shell calls in tests.")
 
 (defvar daemons--shell-command-to-string-fun 'shell-command-to-string
   "Contains a `shell-command-to-string' function.
@@ -195,9 +213,43 @@ the local user and host, which is root with `daemons-always-sudo'."
   (let ((target (daemons--command 'journal-target (daemons-init-system-submodule))))
     (format "*daemons-journal %s for %s*"
             (if target (funcall target name) name)
-            (or (file-remote-p default-directory)
-                (daemons--get-user-and-hostname
-                 (if daemons-always-sudo "/sudo::" default-directory))))))
+            (cond ((daemons--local-sudo-p default-directory)
+                   ;; Whatever this host is called in the directory.
+                   (format "%s@%s" (or (file-remote-p default-directory 'user) "root")
+                           (system-name)))
+                  ((daemons--tramp-prefix default-directory))
+                  (daemons-always-sudo (format "root@%s" (system-name)))
+                  (t (daemons--get-user-and-hostname default-directory))))))
+
+(defun daemons--local-name (file)
+  "Return FILE without its TRAMP prefix, like `file-local-name' of Emacs 26."
+  (or (file-remote-p file 'localname) file))
+
+(defun daemons--tramp-prefix (dir)
+  "Return the whole TRAMP prefix of DIR, every hop of it, or nil if local.
+Unlike `file-remote-p', which gives only the last hop of a multi-hop
+name such as /ssh:me@gw|ssh:me@host:/tmp/."
+  (let ((localname (file-remote-p dir 'localname)))
+    (when localname
+      (substring dir 0 (- (length dir) (length localname))))))
+
+(defun daemons--local-sudo-p (dir)
+  "Return non-nil if DIR is a sudo directory on this host, e.g. /sudo::/tmp/.
+Such a directory, as `daemons-always-sudo' makes, names the local host.
+Only a single sudo, doas or su hop counts: an ssh connection, also to
+localhost on some port or through a gateway, is another machine."
+  (let ((prefix (daemons--tramp-prefix dir)))
+    (and prefix
+         (string-match-p "\\`/\\(?:sudo\\|doas\\|su\\):[^:|]*:\\'" prefix)
+         (member (file-remote-p dir 'host) (list (system-name) "localhost" "")))))
+
+(defun daemons--sudo-directory ()
+  "Become root with `daemons--sudo' if `daemons-always-sudo' is set.
+Return the directory it made, which the caller must remove, or nil."
+  (when daemons-always-sudo
+    (let ((dir default-directory))
+      (daemons--sudo)
+      (unless (equal dir default-directory) default-directory))))
 
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
@@ -244,6 +296,115 @@ active."
       (daemons--run command daemon-name)
       (daemons-output-mode))
     (daemons--switch-output-buffer-create hostname)))
+
+(defun daemons--run-and-echo (command daemon-name)
+  "Run COMMAND on DAEMON-NAME and return what to say in the echo area.
+See `daemons-command-output'.  The command's output comes first, then
+the daemon's one-line status; a failure to get that status is shown in
+its place.  Output of more than one line goes to the output buffer
+instead, and the return value is nil."
+  (let* ((exit nil)
+         (output (with-temp-buffer
+                   (let ((sudo-directory (daemons--sudo-directory)))
+                     (unwind-protect
+                         (let ((fun (or (daemons--command command (daemons-init-system-submodule))
+                                        (error "No such daemon command: %s" command))))
+                           ;; Unlike `shell-command', this returns the exit status.
+                           (setq exit (funcall daemons--process-shell-command-fun
+                                               (funcall fun daemon-name) nil t))
+                           (string-trim (buffer-string)))
+                       (when sudo-directory
+                         (ignore-errors
+                           (delete-directory (daemons--local-name sudo-directory))))))))
+         (failed (and (integerp exit) (/= exit 0)))
+         (status-line (daemons--command 'status-line (daemons-init-system-submodule))))
+    (if (string-match-p "\n" output)
+        (progn (daemons--show-output command daemon-name output) nil)
+      (let ((text (string-join
+                   (delq nil
+                         (list (unless (string-empty-p output) output)
+                               (when (and failed (string-empty-p output))
+                                 (format "`%s' on `%s' failed (exit %d)" command daemon-name exit))
+                               (cond (status-line
+                                      (condition-case err
+                                          (daemons--status-line-string status-line daemon-name)
+                                        (error (format "%s: %s" daemon-name
+                                                       (error-message-string err)))))
+                                     ((and (string-empty-p output) (not failed))
+                                      (format "Ran `%s' on `%s'" command daemon-name)))))
+                   "\n")))
+        text))))
+
+(defun daemons--show-output (command daemon-name output)
+  "Show OUTPUT of COMMAND on DAEMON-NAME in the output buffer."
+  (let ((hostname (daemons--get-user-and-hostname default-directory)))
+    (with-current-buffer (get-buffer-create (daemons--get-output-buffer-name hostname))
+      (setq buffer-read-only nil
+            daemons--current-id daemon-name)
+      (delete-region (point-min) (point-max))
+      (daemons--insert-header (format "Output of `%s` on `%s` (%s):" command daemon-name hostname))
+      (insert output "\n")
+      (daemons-output-mode))
+    (daemons--switch-output-buffer-create hostname)))
+
+(defun daemons--machine (dir)
+  "Return the machine DIR is on, or nil for this host.
+That is the host and port of the last TRAMP hop, where commands run, so
+/ssh:gw|ssh:target: and /ssh:target: are the same machine and ssh
+tunnels to localhost on different ports are different ones.  A sudo,
+doas or su hop to the host of the hop before it, or to this host, does
+not change the machine, so /ssh:me@host|sudo:host: is host and a local
+sudo directory, as from `daemons-always-sudo', is this host."
+  (let ((localname (file-remote-p dir 'localname))
+        (local (list (system-name) "localhost" ""))
+        (machine nil))
+    (when localname
+      (dolist (hop (split-string (substring dir 1 (- (length dir) (length localname) 1))
+                                 "|"))
+        (when (string-match "\\`\\([^:]+\\):\\(?:[^@]*@\\)?\\(.*\\)\\'" hop)
+          (let ((method (match-string 1 hop))
+                (host (match-string 2 hop)))
+            (unless (and (member method '("sudo" "doas" "su"))
+                         (or (member host local)
+                             (and machine
+                                  (equal host (car (split-string machine "#"))))))
+              (setq machine host))))))
+    machine))
+
+(defun daemons--refresh-list-buffer ()
+  "Re-read the lists of daemons on this machine shown in buffers.
+That is the list as the user and as root, e.g. with `daemons-always-sudo'.
+Point stays on the same daemon.  Return the messages of the lists that
+could not be re-read."
+  (let ((machine (daemons--machine default-directory))
+        (errors nil))
+    (dolist (buffer (buffer-list))
+      (with-current-buffer buffer
+        (when (and (derived-mode-p 'daemons-mode)
+                   (equal machine (daemons--machine default-directory)))
+          ;; A list that cannot be re-read, e.g. over a dead connection,
+          ;; must not stop the others; the caller reports the error.
+          (condition-case err
+              (revert-buffer)
+            (error (push (format "Could not refresh %s: %s" (buffer-name)
+                                 (error-message-string err))
+                         errors))))))
+    (nreverse errors)))
+
+(defun daemons--run-changing-state (command daemon-name)
+  "Run COMMAND, which may change the state of DAEMON-NAME.
+Show the result as `daemons-command-output' says, then refresh the list."
+  (let ((text nil)
+        (errors nil))
+    (unwind-protect
+        (if (eq daemons-command-output 'buffer)
+            (daemons--run-with-output-buffer command daemon-name)
+          (setq text (daemons--run-and-echo command daemon-name)))
+      (setq errors (daemons--refresh-list-buffer))
+      ;; Last, so that nothing the refresh says replaces the result.
+      (let ((lines (delq nil (cons text errors))))
+        (when lines (message "%s" (string-join lines "\n")))))
+    text))
 
 (defun daemons--run (command daemon-name)
   "Run the given COMMAND on DAEMON-NAME.
@@ -302,8 +463,10 @@ The car of each pair is the command symbol (e.g. \\='stop).
 The cdr of each pair is a function taking a daemon name and returning a shell
 command to execute.
 
-e.g. \\='((start . (lambda (x) (format \"service %s start\" x)))
-       (stop . (lambda (x) (format \"service %s stop\" x))))
+e.g. \\='((start . (lambda (x)
+                    (format \"service %s start\" (shell-quote-argument x))))
+       (stop . (lambda (x)
+                 (format \"service %s stop\" (shell-quote-argument x)))))
 
 The optional \\='status-line entry differs: its function takes a daemon
 name and returns the one-line status itself (see `daemons-status-line').
@@ -383,32 +546,32 @@ See `daemons-dispatch-on-ret'."
 (defun daemons-start-at-point (name)
   "Start the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'start name))
+  (daemons--run-changing-state 'start name))
 
 (defun daemons-stop-at-point (name)
   "Stop the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'stop name))
+  (daemons--run-changing-state 'stop name))
 
 (defun daemons-restart-at-point (name)
   "Restart the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'restart name))
+  (daemons--run-changing-state 'restart name))
 
 (defun daemons-reload-at-point (name)
   "Reload the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'reload name))
+  (daemons--run-changing-state 'reload name))
 
 (defun daemons-enable-at-point (name)
   "Enable the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'enable name))
+  (daemons--run-changing-state 'enable name))
 
 (defun daemons-disable-at-point (name)
   "Disable the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
-  (daemons--run-with-output-buffer 'disable name))
+  (daemons--run-changing-state 'disable name))
 
 (defun daemons--completing-read ()
   "Call `completing-read' with the current daemons list."
@@ -433,14 +596,7 @@ Signal a `user-error' if the submodule has none."
   "Show a one-line status of the daemon NAME in the echo area and return it."
   (interactive (progn (daemons--status-line-function)
                       (list (daemons--completing-read))))
-  (let* ((status-line (daemons--status-line-function))
-         (line (with-temp-buffer
-                 (let ((dir default-directory))
-                   (when daemons-always-sudo (daemons--sudo))
-                   (unwind-protect (funcall status-line name)
-                     ;; Remove the directory `daemons--sudo' made for this call.
-                     (unless (equal dir default-directory)
-                       (delete-directory (file-local-name default-directory))))))))
+  (let ((line (daemons--status-line-string (daemons--status-line-function) name)))
     (message "%s" line)
     line))
 
@@ -566,6 +722,19 @@ config with its TRAMP prefix."
   (interactive (list (daemons--daemon-at-point)))
   (daemons-edit-config name))
 
+(defun daemons--status-line-string (status-line name)
+  "Return the one-line status of daemon NAME from the function STATUS-LINE.
+With `daemons-always-sudo' it runs as root."
+  (with-temp-buffer
+    (let ((sudo-directory (daemons--sudo-directory)))
+      (unwind-protect (funcall status-line name)
+        ;; Remove only the directory `daemons--sudo' made for this call,
+        ;; wherever STATUS-LINE left us, and not to replace the result,
+        ;; or the real error, if it is gone already.
+        (when sudo-directory
+          (ignore-errors
+            (delete-directory (daemons--local-name sudo-directory))))))))
+
 ;; journal
 (defvar-local daemons--journal-sudo-directory nil
   "The directory `daemons--sudo' made for the current journal buffer, if any.")
@@ -610,7 +779,7 @@ Also remove the directory `daemons--sudo' made for the buffer."
     (when process (delete-process process)))
   (when daemons--journal-sudo-directory
     (ignore-errors
-      (delete-directory (file-local-name daemons--journal-sudo-directory)))))
+      (delete-directory (daemons--local-name daemons--journal-sudo-directory)))))
 
 ;;;###autoload
 (defun daemons-journal (name)
@@ -629,13 +798,15 @@ viewer.  Return the buffer of the default viewer."
         (unless (process-live-p (get-buffer-process buffer))
           (unless (derived-mode-p 'daemons-journal-mode) (daemons-journal-mode))
           (let ((inhibit-read-only t)) (erase-buffer))
-          (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
-            (let ((dir default-directory))
-              (daemons--sudo)
-              (unless (equal dir default-directory)
-                (setq daemons--journal-sudo-directory default-directory))))
           (condition-case err
-              (funcall journal name)
+              (progn
+                (when (and daemons-always-sudo (not daemons--journal-sudo-directory))
+                  (let ((dir default-directory))
+                    (daemons--sudo)
+                    (unless (equal dir default-directory)
+                      (setq daemons--journal-sudo-directory default-directory))))
+                (funcall journal name))
+            ;; Killing the buffer also removes the sudo directory.
             (error (kill-buffer buffer)
                    (signal (car err) (cdr err))))))
       (pop-to-buffer buffer)
@@ -644,39 +815,45 @@ viewer.  Return the buffer of the default viewer."
 
 ;;;###autoload
 (defun daemons-start (name)
-  "Start the daemon NAME.  Show results in an output buffer."
+  "Start the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'start name))
+  (daemons--run-changing-state 'start name))
 
 ;;;###autoload
 (defun daemons-stop (name)
-  "Stop the daemon NAME.  Show results in an output buffer."
+  "Stop the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'stop name))
+  (daemons--run-changing-state 'stop name))
 
 ;;;###autoload
 (defun daemons-restart (name)
-  "Restart the daemon NAME.  Show results in an ouptut buffer."
+  "Restart the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'restart name))
+  (daemons--run-changing-state 'restart name))
 
 ;;;###autoload
 (defun daemons-reload (name)
-  "Reload the daemon NAME.  Show results in an output buffer."
+  "Reload the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'reload name))
+  (daemons--run-changing-state 'reload name))
 
 ;;;###autoload
 (defun daemons-enable (name)
-  "Enable the daemon NAME.  Show results in an output buffer."
+  "Enable the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'enable name))
+  (daemons--run-changing-state 'enable name))
 
 ;;;###autoload
 (defun daemons-disable (name)
-  "Disable the daemon NAME.  Show results in an output buffer."
+  "Disable the daemon NAME and refresh the list.
+See `daemons-command-output' for where the result shows."
   (interactive (list (daemons--completing-read)))
-  (daemons--run-with-output-buffer 'disable name))
+  (daemons--run-changing-state 'disable name))
 
 ;;;###autoload
 (defun daemons ()

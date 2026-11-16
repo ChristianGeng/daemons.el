@@ -66,15 +66,17 @@
 
 
 (ert-deftest daemons--command-test ()
-  (let ((expected  (lambda () "let's go already")))
-    (daemons-define-submodule daemons-command-test
-      "Test: commands submodule"
-      :test t
-      :commands '((stop . (lambda () "plz stop"))
-                    (start . (lambda () "let's go already")))
-      :headers []
-      :list nil)
-    (should (equal expected (daemons--command 'start 'daemons-command-test)))))
+  (daemons-define-submodule daemons-command-test
+    "Test: commands submodule"
+    :test t
+    :commands '((stop . (lambda () "plz stop"))
+                (start . (lambda () "let's go already")))
+    :headers []
+    :list nil)
+  ;; Compare what the command returns: from Emacs 30 an interpreted
+  ;; closure is not `equal' to the list it was written as.
+  (should (equal "let's go already"
+                 (funcall (daemons--command 'start 'daemons-command-test)))))
 
 (ert-deftest daemons--list-headers-test ()
   (let ((expected [("Daemon name" 80 t)
@@ -649,6 +651,243 @@ In BODY, `dir' is that directory and `commands' the shell commands run."
             (insert "x\n")
             (save-buffer))))
       (should (equal '("rygel") restarted)))))
+
+;; state-changing command tests
+(defvar daemons-test--state nil
+  "The state of the daemon of the state test submodule.")
+
+(defvar daemons-test--start-output ""
+  "What starting a daemon of the state test submodule prints.")
+
+(daemons-define-submodule daemons-state-test
+  "Test: submodule whose commands change a daemon's state"
+  :test t
+  :commands '((start . (lambda (name) (setq daemons-test--state 'up)
+                         (format "printf %%s %s; true %s"
+                                 (shell-quote-argument daemons-test--start-output) name)))
+              (stop . (lambda (name) (setq daemons-test--state 'down) (format "true %s" name)))
+              (status-line . (lambda (name) (format "%s: %s" name daemons-test--state))))
+  :headers [("Daemon name" 20 t) ("State" 10 t)]
+  :list (list (list "foo" (vector "foo" (symbol-name daemons-test--state)))
+              (list "bar" (vector "bar" "-"))))
+
+(daemons-define-submodule daemons-state-no-status-line-test
+  "Test: submodule whose commands change state, without a status line"
+  :test t
+  :commands '((stop . (lambda (name) (format "true %s" name))))
+  :headers [("Daemon name" 20 t)]
+  :list nil)
+
+(defmacro daemons-test--with-state (&rest body)
+  "Run BODY with the state test submodule and its list buffer shown."
+  (declare (indent 0))
+  `(let ((daemons-test--state 'down)
+         (daemons-test--start-output "")
+         (daemons-command-output 'echo)
+         (daemons-always-sudo nil)
+         (default-directory "/tmp/"))
+     (daemons-test--with-submodule 'daemons-state-test
+       (let ((list-buffer (get-buffer-create
+                           (daemons--get-list-buffer-name
+                            (daemons--get-user-and-hostname default-directory)))))
+         (unwind-protect
+             (progn (with-current-buffer list-buffer
+                      (daemons-mode)
+                      (daemons--refresh-list)
+                      (tabulated-list-print t)
+                      (goto-char (point-min)))
+                    ,@body)
+           (kill-buffer list-buffer)
+           (let ((output (get-buffer (daemons--get-output-buffer-name
+                                      (daemons--get-user-and-hostname default-directory)))))
+             (when output (kill-buffer output))))))))
+
+(defun daemons-test--row-state (list-buffer id)
+  "Return the State column of row ID in LIST-BUFFER."
+  (with-current-buffer list-buffer
+    (aref (cadr (assoc id (funcall tabulated-list-entries))) 1)))
+
+(ert-deftest daemons-start-refreshes-list-and-echoes-test ()
+  "Starting from the list updates the row and echoes the new state, no window."
+  (daemons-test--with-state
+    (with-current-buffer list-buffer
+      (should (equal "foo" (tabulated-list-get-id)))
+      (should (string-match-p "foo +down" (buffer-string)))
+      (call-interactively #'daemons-start-at-point)
+      (should (string-match-p "foo +up" (buffer-string)))
+      (should (equal "foo" (tabulated-list-get-id))))
+    (should (equal '("foo: up") messages))
+    (should-not (get-buffer (daemons--get-output-buffer-name
+                             (daemons--get-user-and-hostname default-directory))))))
+
+(ert-deftest daemons-start-refreshes-root-list-test ()
+  "A list running as root, e.g. with `daemons-always-sudo', is refreshed too."
+  (daemons-test--with-state
+    (let ((root-list (get-buffer-create
+                      (daemons--get-list-buffer-name
+                       (daemons--get-user-and-hostname "/sudo::/tmp/")))))
+      (unwind-protect
+          (progn
+            (with-current-buffer root-list
+              (setq default-directory "/sudo::/tmp/")
+              (daemons-mode)
+              (daemons--refresh-list)
+              (tabulated-list-print t))
+            (daemons-start "foo")
+            (with-current-buffer root-list
+              (should (string-match-p "foo +up" (buffer-string)))))
+        (kill-buffer root-list)))))
+
+(ert-deftest daemons-machine-test ()
+  "Local sudo directories are this host; ssh, also to localhost, is not."
+  (should-not (daemons--machine "/tmp/"))
+  (should-not (daemons--machine "/sudo::/tmp/"))
+  (should-not (daemons--machine "/sudo:root@localhost:/tmp/"))
+  (should (equal "localhost#2222" (daemons--machine "/ssh:me@localhost#2222:/tmp/")))
+  (should-not (equal (daemons--machine "/ssh:me@localhost#2222:/tmp/")
+                     (daemons--machine "/ssh:me@localhost#2223:/tmp/")))
+  ;; The same machine with and without a sudo hop.
+  (should (equal "host" (daemons--machine "/ssh:me@host:/tmp/")))
+  (should (equal "host" (daemons--machine "/ssh:me@host|sudo:host:/tmp/")))
+  (should (equal "localhost#2222"
+                 (daemons--machine "/ssh:me@localhost#2222|sudo:localhost:/tmp/")))
+  (should (equal "h" (daemons--machine "/ssh:host|sudo:h:/tmp/")))
+  ;; Through a gateway: the target, not the gateway.
+  (should (equal "target" (daemons--machine "/ssh:gw|ssh:target:/tmp/")))
+  (should-not (equal (daemons--machine "/ssh:gw|ssh:a:/tmp/")
+                     (daemons--machine "/ssh:gw|ssh:b:/tmp/"))))
+
+(ert-deftest daemons-start-silent-failure-test ()
+  "A command that fails without output says so, without a status line."
+  (daemons-test--with-state
+    (cl-letf (((symbol-function 'daemons-init-system-submodule)
+               (lambda () 'daemons-state-no-status-line-test))
+              (daemons--process-shell-command-fun (lambda (&rest _) 1)))
+      (daemons-stop "foo"))
+    (should (equal '("`stop' on `foo' failed (exit 1)") messages))))
+
+(ert-deftest daemons-start-status-error-keeps-output-test ()
+  "If the status line fails, the command's own output is still shown."
+  (daemons-test--with-state
+    (let ((daemons-test--start-output "Failed to connect to bus"))
+      (cl-letf (((symbol-function 'daemons--status-line-string)
+                 (lambda (_fn _name) (error "Unexpected output from systemctl show"))))
+        (daemons-start "foo")))
+    (should (equal '("Failed to connect to bus\nfoo: Unexpected output from systemctl show")
+                   messages))))
+
+(ert-deftest daemons-refresh-error-does-not-hide-result-test ()
+  "A list that fails to refresh does not turn a successful command into an error."
+  (daemons-test--with-state
+    (cl-letf (((symbol-function 'daemons--refresh-list)
+               (lambda () (error "List source broke"))))
+      (daemons-start "foo"))
+    ;; One message, the last, with the result first.
+    (should (string-match-p "\\`foo: up\nCould not refresh .*List source broke\\'"
+                            (car messages)))))
+
+(ert-deftest daemons-start-echoes-one-line-output-test ()
+  "One line of output, such as an error, is echoed before the state."
+  (daemons-test--with-state
+    (let ((daemons-test--start-output "Failed to start foo: Access denied"))
+      (daemons-start "foo"))
+    (should (equal '("Failed to start foo: Access denied\nfoo: up") messages))))
+
+(ert-deftest daemons-start-shows-long-output-in-buffer-test ()
+  "Output of more than one line goes to the output buffer."
+  (daemons-test--with-state
+    (let ((daemons-test--start-output "line one\nline two"))
+      (daemons-start "foo"))
+    (let ((output (get-buffer (daemons--get-output-buffer-name
+                               (daemons--get-user-and-hostname default-directory)))))
+      (should output)
+      (should (string-match-p "line one\nline two" (with-current-buffer output (buffer-string)))))
+    (with-current-buffer list-buffer
+      (should (string-match-p "foo +up" (buffer-string))))))
+
+(ert-deftest daemons-start-without-status-line-test ()
+  "Without a status line, the echo area says that the command ran."
+  (daemons-test--with-state
+    (cl-letf (((symbol-function 'daemons-init-system-submodule)
+               (lambda () 'daemons-state-no-status-line-test)))
+      (daemons-stop "foo"))
+    (should (equal '("Ran `stop' on `foo'") messages))))
+
+(ert-deftest daemons-command-output-buffer-test ()
+  "With `daemons-command-output' set to buffer, the output buffer is shown."
+  (daemons-test--with-state
+    (let ((daemons-command-output 'buffer))
+      (daemons-stop "foo"))
+    (should (get-buffer (daemons--get-output-buffer-name
+                         (daemons--get-user-and-hostname default-directory))))
+    (should (equal "down" (daemons-test--row-state list-buffer "foo")))))
+
+;; quoting tests
+(ert-deftest daemons-commands-quote-daemon-name-test ()
+  "Every submodule passes a daemon name with shell syntax as one argument."
+  (let ((name "a b;echo $HOME")
+        (daemons-systemd-color nil)
+        (daemons-systemctl-command-fn #'daemons-systemctl-cmd))
+    (dolist (submodule '(daemons-systemd daemons-sysvinit daemons-brew
+                         daemons-shepherd daemons-openrc))
+      (require submodule)
+      (dolist (command '(status start stop restart reload enable disable))
+        (let ((fun (daemons--command command submodule)))
+          (when fun
+            (let ((cmd (funcall fun name)))
+              (should (string-match-p (regexp-quote (shell-quote-argument name)) cmd))
+              ;; In a real shell the name is one argument and nothing else runs.
+              (let ((words (split-string
+                            (shell-command-to-string
+                             (concat "printf '[%s]\\n' "
+                                     (substring cmd (1+ (string-match " " cmd)))))
+                            "\n" t)))
+                (should (member (format "[%s]" name) words))
+                (should-not (member (format "[%s]" (getenv "HOME")) words))
+                ;; Nor as output of its own, e.g. after "; echo".
+                (should-not (member (getenv "HOME") words))))))))))
+
+(ert-deftest daemons-systemctl-cmd-without-service-test ()
+  "An empty service, as for daemon-reload, is left out rather than quoted."
+  (let ((daemons-systemd-is-user t))
+    (should (equal "systemctl --user daemon-reload"
+                   (daemons-systemctl-cmd "daemon-reload" "")))))
+
+(ert-deftest daemons-journal-sudo-failure-kills-buffer-test ()
+  "If becoming root fails, no half-made journal buffer is left."
+  (daemons-test--with-journal
+    (let ((daemons-always-sudo t))
+      (cl-letf (((symbol-function 'daemons--sudo) (lambda () (error "mktemp failed"))))
+        (should-error (daemons-journal "foo"))
+        (should-not (get-buffer (daemons--get-journal-buffer-name "foo")))))))
+
+(ert-deftest daemons-status-line-removes-only-sudo-directory-test ()
+  "A status line that changes `default-directory' does not get it removed."
+  (let ((other (make-temp-file "daemons-other" t))
+        (daemons-always-sudo nil))
+    (unwind-protect
+        (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-cd-status-line-test))
+                  ((symbol-function 'message) #'ignore))
+          (daemons-define-submodule daemons-cd-status-line-test
+            "Test: status line that changes directory"
+            :test t
+            :commands `((status-line . (lambda (name)
+                                         (setq default-directory ,(file-name-as-directory other))
+                                         (concat name ": up"))))
+            :headers []
+            :list nil)
+          (should (equal "foo: up" (daemons-status-line "foo")))
+          (should (file-directory-p other)))
+      (when (file-directory-p other) (delete-directory other)))))
+
+(ert-deftest daemons-status-line-sudo-directory-gone-test ()
+  "If the sudo directory is gone already, the status line is still returned."
+  (let ((daemons-always-sudo t))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule) (lambda () 'daemons-status-line-test))
+              ((symbol-function 'daemons--sudo)
+               (lambda () (setq default-directory "/tmp/daemons-gone-already-xyz/")))
+              ((symbol-function 'message) #'ignore))
+      (should (equal "foo: up" (daemons-status-line "foo"))))))
 
 ;; system-specific tests
 (dolist (test-suite (directory-files "." t "daemons-.*-test\.el$"))
