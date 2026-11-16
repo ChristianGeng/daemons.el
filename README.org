@@ -44,6 +44,8 @@ You can dismiss either buffer with =q=.
 
 Of course you can also call the commands interactively, e.g. =M-x daemons-start= and enter the daemon's name at the prompt. The prompt has completion, so (for example) you can type =do= to narrow it down to =docker=, or =sys= to narrow it down to any of the 193 =systemd= services.
 
+Start, stop, restart, reload, enable and disable refresh the list, so the row shows the new state, and say in the echo area what happened: the daemon's one-line status (see below), after any one-line output such as an error. Longer output still opens the output buffer. To get the output buffer every time, as before, set =daemons-command-output= to =buffer=.
+
 For a quick "is it up?", =M-x daemons-status-line= (or =daemons-status-line-at-point= on the unit at point) echoes one line instead of the whole status, e.g. =rygel.service: active (running) since 09:14 — enabled=. An unknown unit shows =no such unit=. This is ~systemd~ only; with =daemons-systemd-color= the state is coloured.
 
 To watch a unit's journal as it grows, =M-x daemons-journal= (or =daemons-journal-at-point=) follows =journalctl -f -u UNIT= (with =--user= when =daemons-systemd-is-user= is set) in a buffer of its own for each unit. It scrolls while point is at the end, highlights =err= and =warning= lines with =daemons-systemd-color=, and killing it stops =journalctl=. The default viewer is ~systemd~ only. To use another viewer, set =daemons-journal-function= to a function that takes the unit name; it runs in the current directory, without =daemons-always-sudo=. E.g. for [[https://github.com/SebastianMeisel/journalctl-mode][journalctl-mode]]:
