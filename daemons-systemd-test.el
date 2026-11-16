@@ -573,6 +573,16 @@ A printf stands in for journalctl."
                 (should (string-suffix-p "-- journalctl finished --\n" (buffer-string)))))
           (kill-buffer buffer))))))
 
+(ert-deftest systemd-eldoc-quotes-service-test ()
+  "The eldoc lookup passes a service name with shell syntax as one argument."
+  (let ((command nil))
+    (cl-letf (((symbol-function 'shell-command-to-string)
+               (lambda (cmd) (setq command cmd) "Description=Foo\n")))
+      (should (equal "Foo" (daemons--systemd-documentation-for "a b;echo $HOME")))
+      (should (equal (format "systemctl show %s --no-pager"
+                             (shell-quote-argument "a b;echo $HOME"))
+                     command)))))
+
 (ert-deftest systemd-list-ignores-colour-escapes-test ()
   "Output coloured by SYSTEMD_COLORS in the environment still parses."
   (let* ((daemons-systemd-color nil)
