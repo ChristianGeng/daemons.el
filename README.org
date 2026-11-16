@@ -45,6 +45,8 @@ You can dismiss either buffer with =q=.
 
 Of course you can also call the commands interactively, e.g. =M-x daemons-start= and enter the daemon's name at the prompt. The prompt has completion, so (for example) you can type =do= to narrow it down to =docker=, or =sys= to narrow it down to any of the 193 =systemd= services.
 
+Start, stop, restart, reload, enable and disable refresh the list, so the row shows the new state, and say in the echo area what happened: the daemon's one-line status (see below), after any one-line output such as an error. Longer output still opens the output buffer. To get the output buffer every time, as before, set =daemons-command-output= to =buffer=.
+
 For a quick "is it up?", =M-x daemons-status-line= (or =daemons-status-line-at-point= on the unit at point) echoes one line instead of the whole status, e.g. =rygel.service: active (running) since 09:14 — enabled=. An unknown unit shows =no such unit=. This is ~systemd~ only; with =daemons-systemd-color= the state is coloured.
 
 To watch a unit's journal as it grows, =M-x daemons-journal= (or =daemons-journal-at-point=) follows =journalctl -f -u UNIT= (with =--user= when =daemons-systemd-is-user= is set) in a buffer of its own for each unit. It scrolls while point is at the end, highlights =err= and =warning= lines with =daemons-systemd-color=, and killing it stops =journalctl=. The default viewer is ~systemd~ only. To use another viewer, set =daemons-journal-function= to a function that takes the unit name; it runs in the current directory, without =daemons-always-sudo=. E.g. for [[https://github.com/SebastianMeisel/journalctl-mode][journalctl-mode]]:
@@ -53,7 +55,7 @@ To watch a unit's journal as it grows, =M-x daemons-journal= (or =daemons-journa
 (setq daemons-journal-function
       (lambda (unit)
         (journalctl--follow (append (when daemons-systemd-is-user '("--user"))
-                                    (list "-u" unit)))))
+                                    (list "--lines=100" "-f" "-u" unit)))))
 #+end_src
 
 To change a unit, =M-x daemons-edit= (or =daemons-edit-at-point=) opens its file: the unit's own file when you can write it, e.g. under =~/.config/systemd/user/=, and for a packaged unit the override =systemctl edit= would create, =UNIT.d/override.conf=, so the vendor file under =/usr/lib/systemd= is never opened for writing. An instance such as =foo@bar= gets its own override rather than the template's file, which all instances share; a template such as =foo@.service= gets an override for all of them. System units are edited as root through =/sudo::=; on a remote host through its TRAMP directory, which for a system unit must be a privileged one such as =/ssh:host|sudo:host:=. Saving runs =systemctl daemon-reload= (with =--user= for user units) and the echo area says so. The buffer is in =systemd-mode= when that package is installed. This is ~systemd~ only; =daemons-systemd-vendor-directories= lists the directories that count as vendor files.
@@ -83,7 +85,7 @@ For ~eldoc~ support (currently ~systemd~ only), you can use ~(add-hook 'daemons-
 
 For ~systemd~, setting =daemons-systemd-color= colours the service list by enabled state, and the status buffer by unit state (=active= green, =failed= and =inactive (dead)= red, =activating= / =deactivating= yellow). It also highlights the =Loaded:= and =Active:= labels and journal lines of priority =err= and above.
 
-The ~systemd~ list also has an Active column with each unit's state from =systemctl list-units=: =running=, =exited=, =dead=, =failed=, =activating=, and so on; units that were never loaded show =inactive=, and all show =unknown= if =list-units= fails. With =daemons-systemd-color=, =running= and =exited= are green, =failed= red, =activating= / =deactivating= / =reloading= yellow, and =dead= / =inactive= dimmed (=dead= is normal for a timer-driven oneshot unit between runs). The column is sortable, and =g= refreshes it along with Enabled.
+The ~systemd~ list also has an Active column with each unit's state from =systemctl list-units=: =running=, =exited=, =dead=, =failed=, =activating=, and so on; units that were never loaded show =inactive=, and all show =unknown= if =list-units= fails. An alias, e.g. =dbus-org.bluez=, shows the state of the unit it points to, which one more =systemctl show -p Id= call finds when the list has aliases (systemd 246 and later list them as such). With =daemons-systemd-color=, =running= and =exited= are green, =failed= red, =activating= / =deactivating= / =reloading= yellow, and =dead= / =inactive= dimmed (=dead= is normal for a timer-driven oneshot unit between runs). The column is sortable, and =g= refreshes it along with Enabled.
 
 ** Troubleshooting
 
@@ -129,13 +131,13 @@ To extend =daemons= to support another init system, there are two steps:
 
     ;; This is a map of user commands (see `daemons--commands-alist'):
     :commands
-    '((status . (lambda (name) (format "ex-sys status %s" name)))
-      (start . (lambda (name) (format "ex-sys start %s" name)))
-      (stop . (lambda (name) (format "ex-sys stop %s" name)))
-      (reload . (lambda (name) (format "ex-sys reload %s" name)))
-      (restart . (lambda (name) (format "ex-sys restart %s" name)))
-      (enable . (lambda (name) (format "ex-sys enable %s" name)))
-      (disable . (lambda (name) (format "ex-sys disable %s" name))))
+    '((status . (lambda (name) (format "ex-sys status %s" (shell-quote-argument name))))
+      (start . (lambda (name) (format "ex-sys start %s" (shell-quote-argument name))))
+      (stop . (lambda (name) (format "ex-sys stop %s" (shell-quote-argument name))))
+      (reload . (lambda (name) (format "ex-sys reload %s" (shell-quote-argument name))))
+      (restart . (lambda (name) (format "ex-sys restart %s" (shell-quote-argument name))))
+      (enable . (lambda (name) (format "ex-sys enable %s" (shell-quote-argument name))))
+      (disable . (lambda (name) (format "ex-sys disable %s" (shell-quote-argument name)))))
 
     ;; This is expression to get the daemons list (see `daemons--list'):
     :list
