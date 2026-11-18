@@ -229,6 +229,21 @@ red unit name inside, as systemd logs notices, is not one of them."
         (put-text-property (match-beginning 1) (line-end-position)
                            'font-lock-face 'daemons-systemd-bad)))))
 
+(defun daemons-systemd--mark-failed-processes ()
+  "Give the result of a failed process `daemons-systemd-bad'.
+systemd prints it in bold red, e.g. (code=exited, status=1/FAILURE) on
+a Process: line, in the part before the journal."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((end (save-excursion
+                 (if (and (re-search-forward "^ *Active:" nil t)
+                          (re-search-forward "^$" nil t))
+                     (point)
+                   (point-max)))))
+      (while (re-search-forward "\e\\[0;1;31m\\(([^)\e\n]*)\\)\e\\[0m" end t)
+        (put-text-property (match-beginning 1) (match-end 1)
+                           'font-lock-face 'daemons-systemd-bad)))))
+
 (defun daemons-systemd--strip-escapes ()
   "Delete the escapes coloured systemctl output contains."
   (save-excursion
@@ -243,6 +258,7 @@ Does nothing unless `daemons-systemd-color' is set."
              ;; Not to break the mode if the init system cannot be found.
              (eq (ignore-errors (daemons-init-system-submodule)) 'daemons-systemd))
     (let ((inhibit-read-only t))
+      (daemons-systemd--mark-failed-processes)
       (daemons-systemd--mark-journal-errors)
       (daemons-systemd--strip-escapes))
     (setq-local font-lock-defaults

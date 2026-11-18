@@ -277,6 +277,8 @@ Return the fontified buffer text and the command that was run."
     (should-not (string-match-p "\e" text))
     (should (string-match-p "Loaded: loaded (/u/dtest-fail.service; static)" text))
     (should (eq 'daemons-systemd-bad (daemons-systemd-test--face text "failed (Result")))
+    (should (eq 'daemons-systemd-bad (daemons-systemd-test--face text "(code=exited, status=3)")))
+    (should-not (daemons-systemd-test--face text "ExecStart=/bin/sh"))
     (should (eq 'daemons-systemd-label (daemons-systemd-test--face text "Loaded:")))
     (should (eq 'daemons-systemd-label (daemons-systemd-test--face text "Active:")))
     (should (eq 'daemons-systemd-bad (daemons-systemd-test--face text "boom")))
