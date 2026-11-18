@@ -260,7 +260,9 @@ Return the fontified buffer text and the command that was run."
                     ("echo systemctl; systemctl status foo"
                      . "echo systemctl; env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")
                     ("systemctl-wrapper foo"
-                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; systemctl-wrapper foo")))
+                     . "export SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0; systemctl-wrapper foo")
+                    ("LC_ALL=C sudo systemctl status foo"
+                     . "LC_ALL=C sudo env SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0 systemctl status foo")))
       (let ((daemons-systemctl-command-fn (lambda (_command _service) (car case))))
         (should (equal (cdr case) (daemons-systemd--status-cmd "foo")))
         ;; Independent of the syntax table of the buffer it runs in.
@@ -928,3 +930,38 @@ autovt@.service            alias")
          (lambda (_) "LoadState=error\nActiveState=inactive\nSubState=dead\nUnitFileState=\nActiveEnterTimestamp=n/a\n")))
     (should (equal "foo.service: error, inactive (dead)"
                    (daemons-systemd--status-line "foo")))))
+
+(ert-deftest systemd-status-colours-whole-state-test ()
+  "The parenthesised part of a failed or changing state is coloured too."
+  (dolist (case '(("failed (Result: exit-code)" . daemons-systemd-bad)
+                  ("activating (start-pre)" . daemons-systemd-changing)
+                  ("maintenance (cleaning)" . daemons-systemd-bad)
+                  ("refreshing (mounted)" . daemons-systemd-changing)))
+    (with-temp-buffer
+      (insert "   Active: " (car case) " since Sun\n")
+      (setq font-lock-defaults '(daemons-systemd--status-font-lock-keywords t))
+      (font-lock-ensure)
+      (goto-char (point-min))
+      (search-forward (car case))
+      (should (eq (cdr case) (get-text-property (1- (point)) 'face))))))
+
+(ert-deftest systemd-status-colours-bare-active-test ()
+  "A unit whose sub-state is its state, such as a target, prints a bare
+Active: active, which is coloured too."
+  (with-temp-buffer
+    (insert "     Active: active since Mon 2026-11-16 09:00:00 CET; 2 days ago\n")
+    (setq font-lock-defaults '(daemons-systemd--status-font-lock-keywords t))
+    (font-lock-ensure)
+    (goto-char (point-min))
+    (search-forward "active since")
+    (should (eq 'daemons-systemd-enabled
+                (get-text-property (- (point) (length " since") 1) 'face)))))
+
+(ert-deftest systemd-setup-output-without-init-system-test ()
+  "The output buffer still comes up if the init system cannot be found."
+  (let ((daemons-systemd-color t))
+    (cl-letf (((symbol-function 'daemons-init-system-submodule)
+               (lambda () (error "I'm sorry, your init system isn't supported yet!"))))
+      (with-temp-buffer
+        (daemons-output-mode)
+        (should (derived-mode-p 'daemons-output-mode))))))

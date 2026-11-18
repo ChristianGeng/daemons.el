@@ -46,7 +46,14 @@ this option, see the implementation of `daemons-systemd--cmd'."
   :group 'daemons)
 
 (defcustom daemons-systemd-color nil
-  "If non-nil, colorize services in systemd buffers according to their statuses."
+  "If non-nil, colorize services in systemd buffers according to their statuses.
+The status command then runs with SYSTEMD_COLORS=1 SYSTEMD_URLIFY=0, set
+by `env' right before systemctl, so that journal lines of priority err
+and above can be marked; see `daemons-systemd--status-cmd'.  With a
+custom `daemons-systemctl-command-fn' that wraps sudo, sudo then runs
+env: if sudoers allows only systemctl, leave this off.  Wrappers that
+pass no environment on, such as ssh or sh -c, keep the plain colours of
+the state but lose the marks on journal lines."
   :type 'boolean
   :group 'daemons)
 
@@ -168,6 +175,8 @@ itself."
     (concat
      ;; The start of a command: of the string, or after ; & | or (.
      "\\(?:\\`\\|[;&|(]\\)[ \t]*"
+     ;; Optional variable assignments, such as LC_ALL=C.
+     "\\(?:[A-Za-z_][A-Za-z0-9_]*=" "[^ \t;&|()]*" "[ \t]+\\)*"
      ;; An optional sudo or doas with its options and their arguments.
      "\\(?:\\(?:" word "/\\)?\\(?:sudo\\|doas\\)"
      "\\(?:[ \t]+" word "\\)*?[ \t]+\\)?"
@@ -196,9 +205,11 @@ commands working."
 
 (defconst daemons-systemd--status-font-lock-keywords
   '(("^ *\\(Loaded\\|Active\\):" 1 'daemons-systemd-label)
-    ("^ *Active: \\(active ([^)\n]*)\\)" 1 'daemons-systemd-enabled)
-    ("^ *Active: \\(failed\\|inactive (dead)\\)" 1 'daemons-systemd-bad)
-    ("^ *Active: \\(\\(?:de\\)?activating\\|reloading\\)" 1 'daemons-systemd-changing))
+    ("^ *Active: \\(active\\(?: ([^)\n]*)\\)?\\)" 1 'daemons-systemd-enabled)
+    ("^ *Active: \\(failed\\(?: ([^)\n]*)\\)?\\|inactive (dead)\\)" 1 'daemons-systemd-bad)
+    ("^ *Active: \\(maintenance\\(?: ([^)\n]*)\\)?\\)" 1 'daemons-systemd-bad)
+    ("^ *Active: \\(\\(?:\\(?:de\\)?activating\\|reloading\\|refreshing\\)\\(?: ([^)\n]*)\\)?\\)"
+     1 'daemons-systemd-changing))
   "Font-lock keywords for systemctl status output.")
 
 (defconst daemons-systemd--escape-regexp
@@ -208,7 +219,8 @@ commands working."
 (defun daemons-systemd--mark-journal-errors ()
   "Give journal lines of priority err and above `daemons-systemd-bad'.
 systemd starts the message of such a line with bold red; the journal
-follows the first empty line after the Active: line."
+follows the first empty line after the Active: line.  A bold line with a
+red unit name inside, as systemd logs notices, is not one of them."
   (save-excursion
     (goto-char (point-min))
     (when (and (re-search-forward "^ *Active:" nil t)
@@ -228,7 +240,8 @@ follows the first empty line after the Active: line."
   "Colour systemd output in the current `daemons-output-mode' buffer.
 Does nothing unless `daemons-systemd-color' is set."
   (when (and daemons-systemd-color
-             (eq (daemons-init-system-submodule) 'daemons-systemd))
+             ;; Not to break the mode if the init system cannot be found.
+             (eq (ignore-errors (daemons-init-system-submodule)) 'daemons-systemd))
     (let ((inhibit-read-only t))
       (daemons-systemd--mark-journal-errors)
       (daemons-systemd--strip-escapes))
