@@ -683,13 +683,15 @@ directory that is $XDG_CONFIG_HOME."
   (let ((daemons-systemd-is-user t)
         (default-directory "/tmp/")
         (vendor "/usr/lib/systemd/user/foo.service")
-        (messages nil))
+        (messages nil)
+        (prompts nil))
     (daemons-systemd-test--with-show
         (format "LoadState=loaded\nFragmentPath=%s\n" vendor)
       (cl-letf (((symbol-function 'daemons-init-system-submodule)
                  (lambda () 'daemons-systemd))
                 ((symbol-function 'message)
-                 (lambda (fmt &rest args) (push (apply #'format fmt args) messages))))
+                 (lambda (fmt &rest args) (push (apply #'format fmt args) messages)))
+                ((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt prompts) nil)))
         (let ((buffer (daemons-edit "foo")))
           (unwind-protect
               (with-current-buffer buffer
@@ -700,7 +702,8 @@ directory that is $XDG_CONFIG_HOME."
                 (save-buffer)
                 (should (file-exists-p buffer-file-name))
                 (should (equal "systemctl --user daemon-reload" (car commands)))
-                (should (member "Ran `systemctl --user daemon-reload'" messages)))
+                (should (equal '("Ran `systemctl --user daemon-reload'.  Restart foo? ")
+                               prompts)))
             (kill-buffer buffer)))))))
 
 (ert-deftest systemd-edit-instance-of-own-template-test ()

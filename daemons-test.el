@@ -536,6 +536,43 @@ Doom's offer to create the directory; saving creates it."
       (daemons-edit "foo")
       (should ran))))
 
+(daemons-define-submodule daemons-edit-restart-test
+  "Test: edit submodule that can restart daemons"
+  :test t
+  :commands '((edit . (lambda (_name) daemons-test--edit-file))
+              (edit-saved . (lambda (name) (format "reload %s" name)))
+              (restart . (lambda (name) (format "restart %s" name))))
+  :headers []
+  :list '(("foo" ["foo"])))
+
+(ert-deftest daemons-edit-save-offers-restart-test ()
+  "After the follow-up, saving offers a restart; only yes restarts."
+  (dolist (answer '(t nil))
+    (daemons-test--with-edit
+      (let ((restarted nil)
+            (prompts nil))
+        (cl-letf (((symbol-function 'daemons-init-system-submodule)
+                   (lambda () 'daemons-edit-restart-test))
+                  ((symbol-function 'y-or-n-p) (lambda (prompt) (push prompt prompts) answer))
+                  ((symbol-function 'daemons-restart) (lambda (name) (push name restarted))))
+          (with-current-buffer (daemons-edit "foo")
+            (insert "x=1\n")
+            (save-buffer)))
+        (should (equal '("Ran `reload foo'.  Restart foo? ") prompts))
+        (should (equal (if answer '("foo") nil) restarted))))))
+
+(ert-deftest daemons-edit-failed-reload-offers-no-restart-test ()
+  "A follow-up that prints an error shows it and offers no restart."
+  (daemons-test--with-edit
+    (let ((daemons--shell-command-to-string-fun (lambda (_cmd) "Failed to reload.\n")))
+      (cl-letf (((symbol-function 'daemons-init-system-submodule)
+                 (lambda () 'daemons-edit-restart-test))
+                ((symbol-function 'y-or-n-p) (lambda (_) (ert-fail "offered a restart"))))
+        (with-current-buffer (daemons-edit "foo")
+          (insert "x=1\n")
+          (save-buffer))))
+    (should (member "Ran `reload foo': Failed to reload." messages))))
+
 (ert-deftest daemons-edit-at-point-test ()
   (daemons-test--with-edit
     (with-temp-buffer

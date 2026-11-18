@@ -606,6 +606,10 @@ Signal a `user-error' if the submodule has none."
 ;; Kept, with the hooks below, when the buffer changes its major mode.
 (put 'daemons--edit-saved-command 'permanent-local t)
 
+(defvar-local daemons--edit-restart-daemon nil
+  "The daemon to offer a restart of after the current buffer is saved, or nil.")
+(put 'daemons--edit-restart-daemon 'permanent-local t)
+
 (defun daemons--edit-command ()
   "Return the submodule's \\='edit function.
 Signal a `user-error' if the submodule has none."
@@ -631,14 +635,24 @@ does anyway, and only if it is saved."
       (find-file-noselect file))))
 
 (defun daemons--edit-saved ()
-  "Run `daemons--edit-saved-command' and say so in the echo area.
-It runs in the buffer's directory, so on the host of the file and as
-its user.  Any output, such as an error, is shown too."
-  (when daemons--edit-saved-command
-    (let ((output (string-trim (daemons--shell-command-to-string
-                                daemons--edit-saved-command))))
-      (message "Ran `%s'%s" daemons--edit-saved-command
-               (if (string-empty-p output) "" (concat ": " output))))))
+  "Run `daemons--edit-saved-command', then offer to restart the daemon.
+The command runs in the buffer's directory, so on the host of the file
+and as its user, and so does the restart.  If the command prints
+anything, such as an error, that is shown instead of the offer."
+  (let ((output (and daemons--edit-saved-command
+                     (string-trim (daemons--shell-command-to-string
+                                   daemons--edit-saved-command))))
+        (ran (if daemons--edit-saved-command
+                 (format "Ran `%s'" daemons--edit-saved-command)
+               "Saved")))
+    (cond ((and output (not (string-empty-p output)))
+           (message "%s: %s" ran output))
+          ((and daemons--edit-restart-daemon
+                (y-or-n-p (format "%s.  Restart %s%s? " ran daemons--edit-restart-daemon
+                                  (let ((host (file-remote-p default-directory)))
+                                    (if host (format " on %s" host) "")))))
+           (daemons-restart daemons--edit-restart-daemon))
+          (daemons--edit-saved-command (message "%s" ran)))))
 (put 'daemons--edit-saved 'permanent-local-hook t)
 
 ;;;###autoload
@@ -647,7 +661,7 @@ its user.  Any output, such as an error, is shown too."
 The submodule says which file: for systemd the unit's own file, or an
 override for a packaged unit.  Saving the buffer creates its directory
 if needed, then runs the submodule's follow-up, for systemd
-`systemctl daemon-reload'."
+`systemctl daemon-reload', and offers to restart the daemon."
   (interactive (progn (daemons--edit-command)
                       (list (daemons--completing-read))))
   (let* ((submodule (daemons-init-system-submodule))
@@ -661,7 +675,9 @@ if needed, then runs the submodule's follow-up, for systemd
       ;; the directory.
       (unless (file-exists-p buffer-file-name) (setq buffer-read-only nil))
       ;; Fixed now, as the scope, e.g. systemd --user, may change later.
-      (setq daemons--edit-saved-command (and saved (funcall saved name)))
+      (setq daemons--edit-saved-command (and saved (funcall saved name))
+            daemons--edit-restart-daemon
+            (and (daemons--command 'restart submodule) name))
       (add-hook 'before-save-hook #'daemons--edit-make-directory nil t)
       (add-hook 'after-save-hook #'daemons--edit-saved nil t))
     (pop-to-buffer-same-window buffer)
