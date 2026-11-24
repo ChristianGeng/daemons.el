@@ -356,11 +356,13 @@ Other lines, such as warnings on stderr, are skipped."
     (concat name ".service")))
 
 (defun daemons-systemd--status-line-face (active-state)
-  "Return the face for a unit in ACTIVE-STATE, or nil."
+  "Return the face for a unit in ACTIVE-STATE, or nil.
+The same as in the status buffer, see
+`daemons-systemd--status-font-lock-keywords'."
   (pcase active-state
     ("active" 'daemons-systemd-enabled)
-    ((or "failed" "inactive") 'daemons-systemd-bad)
-    ((or "activating" "deactivating" "reloading") 'daemons-systemd-changing)))
+    ((or "failed" "inactive" "maintenance") 'daemons-systemd-bad)
+    ((or "activating" "deactivating" "reloading" "refreshing") 'daemons-systemd-changing)))
 
 (defun daemons-systemd--status-line-colour (face string)
   "Return STRING in FACE if `daemons-systemd-color' is set."

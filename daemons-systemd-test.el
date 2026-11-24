@@ -379,7 +379,9 @@ LOAD, ACTIVE, SUB, FILE and SINCE are the property values."
   (dolist (case '(("failed" "failed" daemons-systemd-bad)
                   ("activating" "start" daemons-systemd-changing)
                   ("deactivating" "stop-sigterm" daemons-systemd-changing)
-                  ("reloading" "reload" daemons-systemd-changing)))
+                  ("reloading" "reload" daemons-systemd-changing)
+                  ("maintenance" "cleaning" daemons-systemd-bad)
+                  ("refreshing" "mounted" daemons-systemd-changing)))
     (pcase-let* ((`(,active ,sub ,face) case)
                  (state (format "%s (%s)" active sub))
                  (line (car (daemons-systemd-test--status-line
