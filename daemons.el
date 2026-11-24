@@ -151,6 +151,18 @@ Override this to your own value for mocking out shell calls in tests.")
   "Return the buffer name for daemons output on HOSTNAME."
   (format "*daemons-output for %s*" hostname))
 
+(defun daemons--local-name (file)
+  "Return FILE without its TRAMP prefix, like `file-local-name' of Emacs 26."
+  (or (file-remote-p file 'localname) file))
+
+(defun daemons--sudo-directory ()
+  "Become root with `daemons--sudo' if `daemons-always-sudo' is set.
+Return the directory it made, which the caller must remove, or nil."
+  (when daemons-always-sudo
+    (let ((dir default-directory))
+      (daemons--sudo)
+      (unless (equal dir default-directory) default-directory))))
+
 (defun daemons--shell-command (&rest args)
   "Dynamically bound alias for `shell-command' (to enable test mocks).
 ARGS are passed to the underlying function."
@@ -255,7 +267,10 @@ The cdr of each pair is a function taking a daemon name and returning a shell
 command to execute.
 
 e.g. \\='((start . (lambda (x) (format \"service %s start\" x)))
-       (stop . (lambda (x) (format \"service %s stop\" x))))"
+       (stop . (lambda (x) (format \"service %s stop\" x))))
+
+The optional \\='status-line entry differs: its function takes a daemon
+name and returns the one-line status itself (see `daemons-status-line')."
   (let  ((submodule (daemons--get-submodule submodule-name)))
     (plist-get submodule :commands)))
 
@@ -287,6 +302,11 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show the status of the daemon NAME at point in the daemons buffer."
   (interactive (list (daemons--daemon-at-point)))
   (daemons--run-with-output-buffer 'status name))
+
+(defun daemons-status-line-at-point (name)
+  "Show a one-line status of the daemon NAME at point and return it."
+  (interactive (list (daemons--daemon-at-point)))
+  (daemons-status-line name))
 
 (defun daemons-start-at-point (name)
   "Start the daemon NAME at point in the daemons buffer."
@@ -328,6 +348,32 @@ e.g. /ssh:me@example.com|sudo:example.com:"
   "Show the status of the daemon NAME."
   (interactive (list (daemons--completing-read)))
   (daemons--run-with-output-buffer 'status name))
+
+(defun daemons--status-line-function ()
+  "Return the submodule's \\='status-line function.
+Signal a `user-error' if the submodule has none."
+  (let ((submodule (daemons-init-system-submodule)))
+    (or (daemons--command 'status-line submodule)
+        (user-error "%s does not support a one-line status" submodule))))
+
+;;;###autoload
+(defun daemons-status-line (name)
+  "Show a one-line status of the daemon NAME in the echo area and return it."
+  (interactive (progn (daemons--status-line-function)
+                      (list (daemons--completing-read))))
+  (let* ((status-line (daemons--status-line-function))
+         (line (with-temp-buffer
+                 (let ((sudo-directory (daemons--sudo-directory)))
+                   (unwind-protect (funcall status-line name)
+                     ;; Remove only the directory `daemons--sudo' made for
+                     ;; this call, wherever STATUS-LINE left us.
+                     ;; Not to replace the result, or the real error, if the
+                     ;; directory is gone already.
+                     (when sudo-directory
+                       (ignore-errors
+                         (delete-directory (daemons--local-name sudo-directory)))))))))
+    (message "%s" line)
+    line))
 
 ;;;###autoload
 (defun daemons-start (name)
